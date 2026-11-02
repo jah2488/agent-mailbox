@@ -1,0 +1,21 @@
+{
+  "name": "agent-mailbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test 'src/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "0.7.15"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "0.7.14",
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3"
+  }
+}
