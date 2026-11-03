@@ -1,8 +1,8 @@
 import type { Json } from "./canonical.ts";
-import type { SignedCert } from "./cert.ts";
+import { verifyCert, type SignedCert } from "./cert.ts";
 import { open, seal, type Body } from "./envelope.ts";
 import { readHome, withLock, writeState, type Home } from "./home.ts";
-import type { Identity, Pid } from "./identity.ts";
+import { pidOf, type BoxKeys, type Pid } from "./identity.ts";
 import type { KeyStore } from "./keystore.ts";
 import {
   chainsOf,
@@ -21,7 +21,7 @@ import {
   type Outbound,
   type Pattern,
 } from "./mailbox.ts";
-import { signRequest } from "./request-auth.ts";
+import { signRequest, type RequestSigner } from "./request-auth.ts";
 import type { Contact } from "./roster.ts";
 import sodium from "./sodium.ts";
 
@@ -35,9 +35,17 @@ export type ClientDeps = {
   readonly now: () => Date;
   /** Per relay request. Keeps every lock hold well under the lock's stale age. Default 10 s. */
   readonly timeoutMs?: number;
-  /** When set, sends are signed by this certified agent key rather than the root (the daemon's path). */
-  readonly agent?: { readonly signSec: Uint8Array; readonly cert: SignedCert };
+  /**
+   * Daemon mode. When set, `keys` holds the certified agent's signing key
+   * (filed under the agent's pid, with the person's box keys) and the root
+   * signing key is never loaded: reads, sends and decryption all go through
+   * the agent key.
+   */
+  readonly agentCert?: SignedCert;
 };
+
+/** How this process acts for the person: decrypts with their box keys, signs as their root or as a certified agent. */
+type Acting = { readonly box: BoxKeys; readonly signer: RequestSigner };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const PID_PATTERN = /^[a-z2-7]{16}$/;
@@ -57,10 +65,22 @@ function resolveContact(contacts: ReadonlyMap<Pid, Contact>, to: string): Contac
   return found;
 }
 
-async function identityFor(deps: ClientDeps, home: Home): Promise<Identity> {
-  const identity = await deps.keys.load(home.me.pid);
-  if (identity === null) throw new Error(`no secret key for ${home.me.name} (${home.me.pid}) in the key store`);
-  return identity;
+async function actingFor(deps: ClientDeps, home: Home): Promise<Acting> {
+  if (deps.agentCert === undefined) {
+    const identity = await deps.keys.load(home.me.pid);
+    if (identity === null) throw new Error(`no secret key for ${home.me.name} (${home.me.pid}) in the key store`);
+    return { box: identity, signer: identity };
+  }
+  // Checked here so an expired or foreign cert fails with a clear reason rather than a bare relay 401.
+  const cert = verifyCert(deps.agentCert, home.me, deps.now());
+  if (!cert.ok) throw new Error(`agent cert refused: ${cert.error}`);
+  const agent = await deps.keys.load(pidOf(cert.agentSignPub));
+  if (agent === null) throw new Error(`no key for agent "${cert.name}" in the key store`);
+  if (!sodium.memcmp(agent.boxPub, home.me.boxPub)) throw new Error(`agent "${cert.name}" holds box keys for someone other than ${home.me.name}`);
+  return {
+    box: { pid: home.me.pid, boxPub: agent.boxPub, boxSec: agent.boxSec },
+    signer: { pid: home.me.pid, signSec: agent.signSec, cert: deps.agentCert },
+  };
 }
 
 const newRef = (now: Date) => `${now.getTime().toString(36)}-${sodium.to_hex(sodium.randombytes_buf(4))}`;
@@ -106,7 +126,7 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
   return withLock(deps.dir, async () => {
     const home = await readHome(deps.dir);
     const recipient = resolveContact(home.contacts, message.to);
-    const identity = await identityFor(deps, home);
+    const acting = await actingFor(deps, home);
     const now = deps.now();
     const body: Body = {
       tag: message.tag,
@@ -116,7 +136,7 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
       ...(message.text === undefined ? {} : { prose: message.text }),
     };
     const { seq, prev } = nextLink(home.state);
-    const sealed = seal({ from: identity, to: recipient, seq, prev, ts: now.toISOString(), body, ...(message.hops === undefined ? {} : { hops: message.hops }), ...(deps.agent === undefined ? {} : { agent: deps.agent }) });
+    const sealed = seal({ from: acting.signer, to: recipient, seq, prev, ts: now.toISOString(), body, ...(message.hops === undefined ? {} : { hops: message.hops }), ...(acting.signer.cert === undefined ? {} : { agent: { signSec: acting.signer.signSec, cert: acting.signer.cert } }) });
     if (!sealed.ok) throw new Error(`could not seal message: ${sealed.error}`);
 
     // Persist before any network call: a crash after this point retries the
@@ -137,8 +157,8 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
   });
 }
 
-function signedGet(deps: ClientDeps, relay: string, path: string, identity: Identity): Promise<Response> {
-  const authorization = signRequest({ method: "GET", host: new URL(relay).host, path, ts: deps.now().toISOString() }, identity);
+function signedGet(deps: ClientDeps, relay: string, path: string, signer: RequestSigner): Promise<Response> {
+  const authorization = signRequest({ method: "GET", host: new URL(relay).host, path, ts: deps.now().toISOString() }, signer);
   return relayFetch(deps, `${relay}${path}`, { headers: { authorization } });
 }
 
@@ -153,7 +173,7 @@ function readEntries(body: unknown): readonly InboxEntry[] | null {
 }
 
 /** New entries on every distinct relay in my roster, above what I already hold from each sender. */
-async function listWaiting(deps: ClientDeps, home: Home, identity: Identity, state: MailboxState): Promise<{ readonly relay: string; readonly entries: readonly InboxEntry[]; readonly error?: string }[]> {
+async function listWaiting(deps: ClientDeps, home: Home, signer: RequestSigner, state: MailboxState): Promise<{ readonly relay: string; readonly entries: readonly InboxEntry[]; readonly error?: string }[]> {
   // Pids and seqs need no escaping, and the query must reach the relay exactly
   // as signed, so it is built by hand rather than through URLSearchParams.
   const after = Object.entries(knownHeads(state))
@@ -164,7 +184,7 @@ async function listWaiting(deps: ClientDeps, home: Home, identity: Identity, sta
   return Promise.all(
     relays.map(async (relay) => {
       try {
-        const res = await signedGet(deps, relay, path, identity);
+        const res = await signedGet(deps, relay, path, signer);
         if (res.status !== 200) return { relay, entries: [], error: `${relay}: ${await describeFailure(res)}` };
         const entries = readEntries(await res.json().catch(() => null));
         return entries === null ? { relay, entries: [], error: `${relay}: malformed inbox listing` } : { relay, entries };
@@ -178,14 +198,14 @@ async function listWaiting(deps: ClientDeps, home: Home, identity: Identity, sta
 export async function sync(deps: ClientDeps): Promise<SyncResult> {
   return withLock(deps.dir, async () => {
     const home = await readHome(deps.dir);
-    const { state, received, errors } = await syncUnlocked(deps, home, await identityFor(deps, home));
+    const { state, received, errors } = await syncUnlocked(deps, home, await actingFor(deps, home));
     if (state !== home.state) await writeState(deps.dir, state);
     return { received, errors };
   });
 }
 
 /** Caller must hold the home lock and write the returned state. */
-async function syncUnlocked(deps: ClientDeps, home: Home, identity: Identity): Promise<SyncResult & { readonly state: MailboxState }> {
+async function syncUnlocked(deps: ClientDeps, home: Home, acting: Acting): Promise<SyncResult & { readonly state: MailboxState }> {
   const errors: string[] = [];
   const flushed = await flush(deps, home, home.state);
   if (flushed.error !== undefined) errors.push(`outbox: ${flushed.error}`);
@@ -193,7 +213,7 @@ async function syncUnlocked(deps: ClientDeps, home: Home, identity: Identity): P
   let received = 0;
   const stopped = new Set<string>();
 
-  for (const { relay, entries, error } of await listWaiting(deps, home, identity, state)) {
+  for (const { relay, entries, error } of await listWaiting(deps, home, acting.signer, state)) {
     if (error !== undefined) errors.push(error);
     for (const { from, seq } of entries) {
       const sender = home.contacts.get(from as Pid);
@@ -206,9 +226,9 @@ async function syncUnlocked(deps: ClientDeps, home: Home, identity: Identity): P
       }
       if (stopped.has(from)) continue;
       try {
-        const res = await signedGet(deps, relay, `/log/${from}/${seq}`, identity);
+        const res = await signedGet(deps, relay, `/log/${from}/${seq}`, acting.signer);
         if (res.status !== 200) throw new Error(await describeFailure(res));
-        const opened = open(new Uint8Array(await res.arrayBuffer()), { me: identity, roster: home.contacts, chains: chainsOf(state) });
+        const opened = open(new Uint8Array(await res.arrayBuffer()), { me: acting.box, roster: home.contacts, chains: chainsOf(state), now: deps.now() });
         if (opened.ok) {
           state = recordReceived(state, opened, deps.now().toISOString());
           received++;
@@ -238,7 +258,7 @@ export async function receive(deps: ClientDeps, filter: Filter): Promise<{ reado
   return withLock(deps.dir, async () => {
     const home = await readHome(deps.dir);
     const from = filter.from === undefined ? undefined : resolveContact(home.contacts, filter.from).pid;
-    const synced = await syncUnlocked(deps, home, await identityFor(deps, home));
+    const synced = await syncUnlocked(deps, home, await actingFor(deps, home));
     const pattern: Pattern = {
       ...(from === undefined ? {} : { from }),
       ...(filter.tag === undefined ? {} : { tag: filter.tag }),
@@ -269,8 +289,8 @@ export async function readThread(deps: ClientDeps, ref: string): Promise<readonl
  */
 export async function checkInbox(deps: ClientDeps): Promise<InboxCheck> {
   const home = await readHome(deps.dir);
-  const identity = await identityFor(deps, home);
-  const known = (await listWaiting(deps, home, identity, home.state)).flatMap((r) => r.entries).filter((e) => home.contacts.has(e.from as Pid));
+  const acting = await actingFor(deps, home);
+  const known = (await listWaiting(deps, home, acting.signer, home.state)).flatMap((r) => r.entries).filter((e) => home.contacts.has(e.from as Pid));
   const names = [...new Set(known.map((e) => home.contacts.get(e.from as Pid)?.name ?? e.from))];
   return { waiting: known.length, unread: unreadCount(home.state), from: names };
 }

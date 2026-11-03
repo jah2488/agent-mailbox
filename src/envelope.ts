@@ -1,6 +1,6 @@
 import { canonicalize, type Json } from "./canonical.ts";
 import { verifyCert, type SignedCert } from "./cert.ts";
-import type { Identity, Peer, Pid } from "./identity.ts";
+import type { BoxKeys, Identity, Peer, Pid } from "./identity.ts";
 import sodium from "./sodium.ts";
 
 export const MAX_ENVELOPE_BYTES = 256 * 1024;
@@ -50,7 +50,7 @@ export type ChainLink = { readonly seq: number; readonly hash: Hash };
 export type SenderChain = { readonly recent: readonly ChainLink[] };
 
 export type OpenContext = {
-  readonly me: Identity;
+  readonly me: BoxKeys;
   readonly roster: ReadonlyMap<Pid, Peer>;
   readonly chains: ReadonlyMap<Pid, SenderChain>;
   /** For cert expiry. Defaults to the current time. */
@@ -87,7 +87,7 @@ export type Opened = {
 type Failure<E> = { readonly ok: false; readonly error: E };
 
 export type SealInput = {
-  readonly from: Identity;
+  readonly from: Pick<Identity, "pid" | "signSec">;
   readonly to: Peer;
   readonly seq: number;
   readonly prev: Hash | null;
@@ -284,7 +284,7 @@ function checkChain(header: Header, hash: Hash, recent: readonly ChainLink[]): O
 
 function decryptBody(
   ciphertext: string,
-  me: Identity,
+  me: BoxKeys,
 ): { readonly ok: true; readonly body: Body; readonly from: string } | Failure<"decrypt_failed" | "malformed"> {
   let value: unknown;
   try {

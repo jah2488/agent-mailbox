@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { checkInbox, receive, send, sync } from "./client.ts";
 import { readHome } from "./home.ts";
 import { take, thread } from "./mailbox.ts";
-import { world } from "./test-world.ts";
+import { issueCert } from "./cert.ts";
+import { agentIdentity } from "./identity.ts";
+import { daemonOf, world } from "./test-world.ts";
 
 test("alice asks bob by name; bob syncs and takes exactly her message", async () => {
   const { alice, bob } = await world();
@@ -166,4 +168,35 @@ test("checkInbox counts new mail without writing any state", async () => {
   const before = await readFile(join(bob.deps.dir, "state.json"), "utf8");
   assert.deepEqual(await checkInbox(bob.deps), { waiting: 2, unread: 0, from: ["Alice"] });
   assert.equal(await readFile(join(bob.deps.dir, "state.json"), "utf8"), before);
+});
+
+test("a daemon holding only its certified agent key reads, decrypts and answers mail without the root key", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonOf(bob);
+  assert.equal(await daemon.keys.load(bob.id.pid), null, "the daemon's key store must not hold Bob's root key");
+
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  const { messages } = await receive(daemon, { tag: "ask" });
+  assert.deepEqual(messages.map((m) => m.body.prose), ["status?"]);
+
+  const replied = await send(daemon, { to: "Alice", tag: "reply", reply_to: asked.ref, text: "green" });
+  assert.equal(replied.delivered, true);
+  const answer = await receive(alice.deps, { reply_to: asked.ref });
+  assert.deepEqual(answer.messages.map((m) => [m.body.prose, m.via]), [["green", { kind: "agent", name: "daemon" }]]);
+});
+
+test("a daemon whose cert was issued by someone else is refused before it touches a relay", async () => {
+  const { alice, bob } = await world();
+  const daemon = { ...(await daemonOf(bob)), agentCert: (await daemonOf(alice)).agentCert };
+  await assert.rejects(sync(daemon), /agent cert refused/);
+});
+
+test("a daemon whose key store holds another person's box keys is refused", async () => {
+  const { alice, bob } = await world();
+  const alices = await daemonOf(alice);
+  // Bob's home, Alice's agent keys: the cert check alone would pass if Bob had certified this key.
+  const agent = agentIdentity(alice.id);
+  await alices.keys.save(agent);
+  const cert = issueCert(bob.id, { agentSignPub: agent.signPub, name: "daemon", device: "test", now: new Date() });
+  await assert.rejects(sync({ ...bob.deps, keys: alices.keys, agentCert: cert }), /box keys for someone other than Bob/);
 });

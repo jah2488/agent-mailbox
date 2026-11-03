@@ -11,6 +11,9 @@ export type Peer = { readonly pid: Pid; readonly signPub: Uint8Array; readonly b
 
 export type Identity = Peer & { readonly signSec: Uint8Array; readonly boxSec: Uint8Array };
 
+/** What decrypting mail addressed to a person takes. The daemon holds these without the root signing key. */
+export type BoxKeys = Pick<Identity, "pid" | "boxPub" | "boxSec">;
+
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
 function base32(bytes: Uint8Array): string {
@@ -59,4 +62,15 @@ export function generateIdentity(): Identity {
 
 export function toPeer({ pid, signPub, boxPub }: Identity): Peer {
   return { pid, signPub, boxPub };
+}
+
+/**
+ * A daemon's key-store entry: a fresh agent signing pair alongside the
+ * person's box keys, filed under the agent's own pid. Holding it lets the
+ * daemon decrypt the person's mail and sign as their certified agent, but
+ * never sign as the person.
+ */
+export function agentIdentity(person: BoxKeys): Identity {
+  const sign = sodium.crypto_sign_keypair();
+  return { pid: pidOf(sign.publicKey), signPub: sign.publicKey, signSec: sign.privateKey, boxPub: person.boxPub, boxSec: person.boxSec };
 }

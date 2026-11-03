@@ -3,9 +3,10 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { issueCert, type SignedCert } from "./cert.ts";
 import type { ClientDeps } from "./client.ts";
 import { addContact, initHome } from "./home.ts";
-import { generateIdentity, toPeer, type Identity } from "./identity.ts";
+import { agentIdentity, generateIdentity, toPeer, type Identity } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import { memoryStore } from "./memory-store.ts";
 import { handle } from "./relay.ts";
@@ -54,4 +55,12 @@ export async function world(options: WorldOptions = {}) {
   await addContact(bob.deps.dir, alice.me);
   await addContact(mallory.deps.dir, bob.me);
   return { alice, bob, mallory, store };
+}
+
+/** The person's daemon: same home dir, its own key store holding only the certified agent key and their box keys. */
+export async function daemonOf(person: Person, name = "daemon"): Promise<ClientDeps & { readonly agentCert: SignedCert }> {
+  const agent = agentIdentity(person.id);
+  const keys = fileKeyStore(join(person.deps.dir, "agent-keys.json"));
+  await keys.save(agent);
+  return { ...person.deps, keys, agentCert: issueCert(person.id, { agentSignPub: agent.signPub, name, device: "test", now: new Date() }) };
 }
