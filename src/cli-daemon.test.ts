@@ -33,6 +33,7 @@ function ioFor(
     errors,
     calls,
     launchAgents: join(person.deps.dir, "LaunchAgents"),
+    claudeSettings: join(person.deps.dir, "claude-settings.json"),
     exec: async (program, args) => {
       calls.push([program, ...args]);
       return { code: exitCodes[program] ?? 0, output: "" };
@@ -157,12 +158,14 @@ test("uninstall stops the daemon, unregisters the MCP server and removes the com
   const io = ioFor(bob, { HOME: fakeHome });
   await run(["daemon", "setup"], io);
   await run(["daemon", "start"], io);
+  await run(["hook", "install"], io);
 
   assert.equal(await run(["uninstall"], io), 0, io.errors.join("\n"));
   assert.ok(io.calls.some((c) => c[0] === "launchctl" && c[1] === "bootout"));
   assert.ok(io.calls.some((c) => c.join(" ") === "claude mcp remove --scope user agent-mailbox"));
   assert.deepEqual(await readdir(join(fakeHome, ".local", "bin")), []);
   assert.deepEqual(await readdir(io.launchAgents), []);
+  assert.deepEqual(JSON.parse(await readFile(io.claudeSettings, "utf8")), {});
   assert.ok((await readHome(bob.deps.dir)).me, "the identity and mail stay");
   assert.match(io.lines.join("\n"), /rm -rf/);
 });

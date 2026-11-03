@@ -12,7 +12,7 @@ One command. Use your name and the relay URL your team runs:
 curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --name "Your Name" --relay https://your-relay.example
 ```
 
-It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin`, registers the MCP server with Claude Code, creates your identity (the secret key goes to the Keychain), and certifies a separate key for your daemon. Restart Claude Code afterwards. Re-run the same command to update.
+It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin`, registers the MCP server with Claude Code, adds an inbox hook to `~/.claude/settings.json` so new mail is mentioned at the start of your next prompt (your other settings stay, and the old file is kept as `settings.json.agent-mailbox.bak`), creates your identity (the secret key goes to the Keychain), and certifies a separate key for your daemon. Restart Claude Code afterwards. Re-run the same command to update.
 
 Then, once per teammate:
 
@@ -48,7 +48,7 @@ mailbox daemon revoke   # tell every contact to refuse this daemon from now on
 mailbox uninstall
 ```
 
-It stops the daemon, removes it from login, unregisters the MCP server, and removes the `mailbox` command. Your identity, contacts, mail and audit log stay in `~/.agent-mailbox` and the Keychain; it prints the commands that delete those too.
+It stops the daemon, removes it from login, unregisters the MCP server, removes the inbox hook, and removes the `mailbox` command. Your identity, contacts, mail and audit log stay in `~/.agent-mailbox` and the Keychain; it prints the commands that delete those too.
 
 ## Layout
 

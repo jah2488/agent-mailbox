@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type CliIo } from "./cli.ts";
@@ -25,6 +25,7 @@ async function freshIo(): Promise<CliIo & { readonly lines: string[]; readonly e
     stop: AbortSignal.abort(),
     exec: async () => ({ code: 0, output: "" }),
     launchAgents: join(dir, "LaunchAgents"),
+    claudeSettings: join(dir, "claude-settings.json"),
   };
 }
 
@@ -106,17 +107,52 @@ test("roots prints an allowlist the relay accepts, covering me and my contacts",
   assert.equal(parsed.roots.size, 1);
 });
 
-test("install prints commands with absolute paths and never edits settings itself", async () => {
+test("install prints the setup steps and points at hook install rather than editing settings itself", async () => {
   const io = await freshIo();
   assert.equal(await run(["install"], io), 0);
   const output = io.lines.join("\n");
   assert.match(output, /claude mcp add .*agent-mailbox .*node \/opt\/agent-mailbox\/src\/mcp-main\.ts/);
-  assert.match(output, /UserPromptSubmit/);
-  assert.match(output, /\/opt\/agent-mailbox\/src\/hook\.ts/);
+  assert.match(output, /mailbox hook install/);
+  await assert.rejects(readFile(io.claudeSettings, "utf8"));
 });
 
 test("an unknown command prints usage and fails", async () => {
   const io = await freshIo();
   assert.equal(await run(["frobnicate"], io), 2);
   assert.match(io.errors.join("\n"), /usage/i);
+});
+
+test("hook install merges the inbox hook into Claude settings, keeping a backup, and hook remove takes it out", async () => {
+  const io = await freshIo();
+  const original = { model: "opus", hooks: { Stop: [{ hooks: [{ type: "command", command: "say done" }] }] } };
+  await writeFile(io.claudeSettings, JSON.stringify(original));
+
+  assert.equal(await run(["hook", "install"], io), 0, io.errors.join("\n"));
+  const installed = JSON.parse(await readFile(io.claudeSettings, "utf8"));
+  assert.deepEqual(installed.hooks.UserPromptSubmit, [{ hooks: [{ type: "command", command: "node /opt/agent-mailbox/src/hook.ts", timeout: 5 }] }]);
+  assert.deepEqual(installed.hooks.Stop, original.hooks.Stop);
+  assert.deepEqual(JSON.parse(await readFile(`${io.claudeSettings}.agent-mailbox.bak`, "utf8")), original);
+
+  assert.equal(await run(["hook", "remove"], io), 0);
+  assert.deepEqual(JSON.parse(await readFile(io.claudeSettings, "utf8")), original);
+});
+
+test("hook install leaves a settings file it can't parse exactly as it was", async () => {
+  const io = await freshIo();
+  await writeFile(io.claudeSettings, "{ not json");
+  assert.equal(await run(["hook", "install"], io), 1);
+  assert.equal(await readFile(io.claudeSettings, "utf8"), "{ not json");
+  assert.match(io.errors.join("\n"), /settings\.json/);
+});
+
+test("hook install creates settings when there are none", async () => {
+  const io = await freshIo();
+  assert.equal(await run(["hook", "install"], io), 0, io.errors.join("\n"));
+  assert.equal(JSON.parse(await readFile(io.claudeSettings, "utf8")).hooks.UserPromptSubmit.length, 1);
+});
+
+test("hook remove with no settings file creates none", async () => {
+  const io = await freshIo();
+  assert.equal(await run(["hook", "remove"], io), 0);
+  await assert.rejects(readFile(io.claudeSettings, "utf8"));
 });

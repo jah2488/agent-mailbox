@@ -216,22 +216,6 @@ async function stop(io: CliIo): Promise<number> {
   return 0;
 }
 
-/** Turns everything off that install set up. Keys, mail and the audit log stay until the owner deletes them. */
-async function uninstall(io: CliIo): Promise<number> {
-  if ((await stop(io)) !== 0) io.err("no mailbox identity here, so there was no daemon to stop");
-  const mcp = await io.exec("claude", ["mcp", "remove", "--scope", "user", "agent-mailbox"]);
-  io.out(mcp.code === 0 ? "Removed the agent-mailbox MCP server from Claude Code." : "The agent-mailbox MCP server was not registered with Claude Code.");
-  const link = join(io.env["HOME"] ?? "", ".local", "bin", "mailbox");
-  // Only our own link: a different `mailbox` on the PATH is someone else's.
-  if ((await readlink(link).catch(() => null)) === join(io.repoRoot, "bin", "mailbox")) {
-    await rm(link);
-    io.out(`Removed ${link}.`);
-  }
-  io.out("Your identity, contacts, mail and audit log are kept. To delete them too:");
-  io.out(`  rm -rf '${io.deps.dir}' '${io.repoRoot}'`);
-  io.out("  security delete-generic-password -s agent-mailbox   (and -s agent-mailbox-agent; repeat each until it says the item could not be found)");
-  return 0;
-}
 
 async function policy(args: readonly string[], io: CliIo): Promise<number> {
   const home = await homeOf(io);
@@ -377,4 +361,4 @@ export async function daemonCommand(args: readonly string[], io: CliIo): Promise
   return 2;
 }
 
-export { auditVerify, policy as policyCommand, review, uninstall };
+export { auditVerify, policy as policyCommand, review, stop as daemonStop };

@@ -19,6 +19,7 @@ process.exitCode = await run(process.argv.slice(2), {
   exec: (program, args) =>
     new Promise((done) => execFile(program, [...args], (error, stdout, stderr) => done({ code: error === null ? 0 : typeof error.code === "number" ? error.code : 1, output: `${stdout}${stderr}`.trim() }))),
   launchAgents: join(homedir(), "Library", "LaunchAgents"),
+  claudeSettings: join(homedir(), ".claude", "settings.json"),
   out: (line) => console.log(line),
   err: (line) => console.error(line),
   repoRoot,

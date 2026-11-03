@@ -1,6 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { auditVerify, daemonCommand, policyCommand, review, uninstall } from "./cli-daemon.ts";
+import { withHook, withoutHook } from "./claude-settings.ts";
+import { auditVerify, daemonCommand, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
@@ -23,6 +25,8 @@ export type CliIo = {
   readonly exec: (program: string, args: readonly string[]) => Promise<{ readonly code: number; readonly output: string }>;
   /** ~/Library/LaunchAgents, where daemon start puts the plist. */
   readonly launchAgents: string;
+  /** ~/.claude/settings.json, where hook install adds the inbox hook. */
+  readonly claudeSettings: string;
 };
 
 const USAGE = [
@@ -34,6 +38,7 @@ const USAGE = [
   "  sync                                 fetch new mail now",
   "  roots                                print the relay allowlist for you and your contacts",
   "  install                              print the Claude Code setup commands",
+  "  hook install | remove                add or remove the inbox hook in ~/.claude/settings.json",
   "  daemon setup [--name <agent>]        certify a daemon key and create the share folder and policy",
   "  daemon once | run                    answer waiting asks once, or every 30 s until stopped",
   "  daemon start | stop                  turn the daemon on (now and at login) or off",
@@ -145,13 +150,60 @@ async function roots(io: CliIo): Promise<number> {
 
 function install(io: CliIo): number {
   const node = (file: string) => `node ${io.repoRoot}/src/${file}`;
-  const hook = { UserPromptSubmit: [{ hooks: [{ type: "command", command: node("hook.ts"), timeout: 5 }] }] };
   io.out("1. Register the MCP server (once):");
   io.out(`   claude mcp add --scope user agent-mailbox -- ${node("mcp-main.ts")}`);
-  io.out('2. Merge this into the "hooks" object in ~/.claude/settings.json, keeping any hooks you already have:');
-  io.out(`   ${JSON.stringify(hook)}`);
+  io.out("2. Add the inbox hook, which mentions new mail at the start of each prompt (keeps your other settings and a backup):");
+  io.out("   mailbox hook install");
   io.out("3. Restart Claude Code. Leave mailbox_send off your permission allowlist, so you approve every send.");
   io.out("Both read MAILBOX_HOME (default ~/.agent-mailbox). This command never edits your settings.");
+  return 0;
+}
+
+/**
+ * Adds or removes the inbox hook in ~/.claude/settings.json. Only that one
+ * entry changes; a file that isn't valid JSON is left untouched, and the
+ * previous file is kept beside it as .agent-mailbox.bak.
+ */
+export async function hookCommand(action: string | undefined, io: CliIo): Promise<number> {
+  if (action !== "install" && action !== "remove") {
+    io.err("usage: mailbox hook install|remove");
+    return 2;
+  }
+  const path = io.claudeSettings;
+  const before = await readFile(path, "utf8").catch(() => null);
+  if (before === null && action === "remove") return 0;
+  let next: unknown;
+  try {
+    const current: unknown = before === null ? {} : JSON.parse(before);
+    next = action === "install" ? withHook(current, `node ${io.repoRoot}/src/hook.ts`) : withoutHook(current);
+  } catch (error) {
+    io.err(`left ${path} unchanged: ${error instanceof SyntaxError ? "settings.json is not valid JSON" : (error as Error).message}`);
+    return 1;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  if (before !== null) await writeFile(`${path}.agent-mailbox.bak`, before);
+  const tmp = `${path}.agent-mailbox.tmp`;
+  await writeFile(tmp, JSON.stringify(next, null, 2) + "\n");
+  await rename(tmp, path);
+  io.out(action === "install" ? "Inbox hook on: Claude Code mentions new mail at the start of each prompt." : "Inbox hook removed from Claude Code.");
+  return 0;
+}
+
+/** Turns everything off that install set up. Keys, mail and the audit log stay until the owner deletes them. */
+export async function uninstall(io: CliIo): Promise<number> {
+  if ((await daemonStop(io)) !== 0) io.err("no mailbox identity here, so there was no daemon to stop");
+  await hookCommand("remove", io);
+  const mcp = await io.exec("claude", ["mcp", "remove", "--scope", "user", "agent-mailbox"]);
+  io.out(mcp.code === 0 ? "Removed the agent-mailbox MCP server from Claude Code." : "The agent-mailbox MCP server was not registered with Claude Code.");
+  const link = join(io.env["HOME"] ?? "", ".local", "bin", "mailbox");
+  // Only our own link: a different `mailbox` on the PATH is someone else's.
+  if ((await readlink(link).catch(() => null)) === join(io.repoRoot, "bin", "mailbox")) {
+    await rm(link);
+    io.out(`Removed ${link}.`);
+  }
+  io.out("Your identity, contacts, mail and audit log are kept. To delete them too:");
+  io.out(`  rm -rf '${io.deps.dir}' '${io.repoRoot}'`);
+  io.out("  security delete-generic-password -s agent-mailbox   (and -s agent-mailbox-agent; repeat each until it says the item could not be found)");
   return 0;
 }
 
@@ -179,6 +231,8 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return policyCommand(rest, io);
     case "review":
       return review(io);
+    case "hook":
+      return hookCommand(rest[0], io);
     case "uninstall":
       return uninstall(io);
     case "audit":

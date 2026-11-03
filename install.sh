@@ -4,7 +4,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --name "Your Name" --relay https://your-relay.example
 #
 # Installs the code into ~/.local/share/agent-mailbox, links `mailbox` into
-# ~/.local/bin, registers the MCP server with Claude Code, and (with --name and
+# ~/.local/bin, registers the MCP server and the inbox hook with Claude Code
+# (a backup of settings.json is kept beside it), and (with --name and
 # --relay) creates your identity and your daemon's certified key. It never
 # starts the daemon: that is `mailbox daemon start`, and `mailbox daemon stop`
 # turns it off. `mailbox uninstall` reverses all of this.
@@ -54,6 +55,8 @@ if command -v claude > /dev/null; then
     claude mcp add --scope user agent-mailbox -- node "$dir/src/mcp-main.ts" > /dev/null
     say "Registered the agent-mailbox MCP server with Claude Code"
   fi
+  # Without it, replies wait unseen until someone asks to check the mailbox.
+  "$mailbox" hook install
 else
   echo "warning: claude not found; once it is installed, run: claude mcp add --scope user agent-mailbox -- node $dir/src/mcp-main.ts" >&2
 fi
