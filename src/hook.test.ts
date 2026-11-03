@@ -55,18 +55,23 @@ const DAY = 86_400_000;
 const expiresIn = (ms: number) => new Date(now.getTime() + ms).toISOString();
 
 test("a cert with a week or more left, or no daemon at all, says nothing", () => {
-  assert.equal(certNotice(null, now), null);
-  assert.equal(certNotice(expiresIn(8 * DAY), now), null);
+  assert.equal(certNotice(null, true, now), null);
+  assert.equal(certNotice(expiresIn(8 * DAY), true, now), null);
 });
 
 test("a cert inside its last week says how many days are left and how to renew", () => {
   assert.equal(
-    certNotice(expiresIn(3 * DAY + 1000), now),
+    certNotice(expiresIn(3 * DAY + 1000), true, now),
     "agent-mailbox: the user's daemon certificate expires in 3 days. Tell the user to run `mailbox daemon setup` in a terminal to renew it for 30 days.",
   );
-  assert.match(certNotice(expiresIn(2 * 3600_000), now) ?? "", /expires in less than a day/);
+  assert.match(certNotice(expiresIn(2 * 3600_000), true, now) ?? "", /expires in less than a day/);
 });
 
 test("an expired cert says the daemon has stopped answering", () => {
-  assert.match(certNotice(expiresIn(-DAY), now) ?? "", /expired, so their daemon has stopped answering/);
+  assert.match(certNotice(expiresIn(-DAY), true, now) ?? "", /expired, so their daemon has stopped answering/);
+});
+
+test("a cert near or past expiry says nothing when the daemon was never started, as for everyone right after setup", () => {
+  assert.equal(certNotice(expiresIn(2 * DAY), false, now), null);
+  assert.equal(certNotice(expiresIn(-DAY), false, now), null);
 });

@@ -4,7 +4,8 @@
 // It must never slow down or fail a prompt: every error is swallowed, every
 // check is throttled, and together they are capped at CHECK_TIMEOUT_MS.
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkInbox } from "./client.ts";
@@ -46,7 +47,11 @@ async function cert(dir: string, now: Date): Promise<string | null> {
   const expires = await readFile(join(dir, "agent.json"), "utf8")
     .then((raw) => (JSON.parse(raw) as { c?: { expires?: unknown } }).c?.expires)
     .catch(() => undefined);
-  const notice = certNotice(typeof expires === "string" ? expires : null, now);
+  const pid = await readFile(join(dir, "me.json"), "utf8")
+    .then((raw) => (JSON.parse(raw) as { pid?: unknown }).pid)
+    .catch(() => undefined);
+  const daemonOn = typeof pid === "string" && (await access(join(homedir(), "Library", "LaunchAgents", `com.agent-mailbox.daemon.${pid}.plist`)).then(() => true, () => false));
+  const notice = certNotice(typeof expires === "string" ? expires : null, daemonOn, now);
   // Only a shown warning starts the daily quiet period, so a cert that enters its last week is mentioned the same day.
   if (notice !== null) await writeFile(cache, JSON.stringify({ checkedAt: now.toISOString() }));
   return notice;
