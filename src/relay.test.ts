@@ -5,6 +5,7 @@ import { hashOf, seal, type Body, type Hash } from "./envelope.ts";
 import { signRequest } from "./request-auth.ts";
 import { handle, type Store } from "./relay.ts";
 import { memoryStore } from "./memory-store.ts";
+import { issueCert } from "./cert.ts";
 
 const alice = generateIdentity();
 const bob = generateIdentity();
@@ -194,6 +195,29 @@ test("a signed request is bound to its method", async () => {
   const path = `/inbox/${bob.pid}`;
   const auth = signRequest({ method: "POST", host: HOST, path, ts: NOW.toISOString() }, bob);
   assert.equal((await relay()(new Request(`${BASE}${path}`, { headers: { authorization: auth } }))).status, 401);
+});
+
+test("a certified agent can read its person's inbox without the root key", async () => {
+  const send = relay();
+  await send(put(alice, 0, envelope(alice, bob, 0, null)));
+  const daemonKey = generateIdentity();
+  const cert = issueCert(bob, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: NOW });
+  const path = `/inbox/${bob.pid}`;
+  const auth = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, { pid: bob.pid, signSec: daemonKey.signSec, cert });
+  const res = await send(new Request(`${BASE}${path}`, { headers: { authorization: auth } }));
+  assert.deepEqual([res.status, await json(res)], [200, { entries: [{ from: alice.pid, seq: 0 }] }]);
+});
+
+test("an agent request with someone else's cert, or signed by a key the cert doesn't name, is refused", async () => {
+  const send = relay();
+  const daemonKey = generateIdentity();
+  const path = `/inbox/${bob.pid}`;
+  const malloryCert = issueCert(mallory, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: NOW });
+  const borrowed = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, { pid: bob.pid, signSec: daemonKey.signSec, cert: malloryCert });
+  assert.equal((await send(new Request(`${BASE}${path}`, { headers: { authorization: borrowed } }))).status, 401);
+  const bobCert = issueCert(bob, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: NOW });
+  const wrongKey = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, { pid: bob.pid, signSec: mallory.signSec, cert: bobCert });
+  assert.equal((await send(new Request(`${BASE}${path}`, { headers: { authorization: wrongKey } }))).status, 401);
 });
 
 test("a request whose signed fields were altered is refused", async () => {
