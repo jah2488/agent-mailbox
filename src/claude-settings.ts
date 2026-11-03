@@ -7,7 +7,7 @@ type Settings = Readonly<Record<string, Json>>;
 type HookGroup = { readonly matcher?: string; readonly hooks: readonly { readonly type?: string; readonly command?: string; readonly timeout?: number }[] };
 
 /** Ours, wherever this checkout was installed from. */
-const isInboxHook = (command: unknown) => typeof command === "string" && /agent-mailbox\/src\/hook\.ts$/.test(command.trim());
+const isInboxHook = (command: unknown) => typeof command === "string" && /agent-mailbox\/src\/hook\.ts"?$/.test(command.trim());
 
 const isObject = (value: Json): value is Settings => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -46,19 +46,33 @@ function withAskRules(settings: Settings, ask: readonly string[]): Settings {
   return Object.keys(nextPermissions).length > 0 ? { ...rest, permissions: nextPermissions } : rest;
 }
 
+/** Takes out the inbox hook only. The send rule stays: turning off notices must not turn off approval. */
 export function withoutHook(input: Json): Settings {
   const { settings, hooks, groups } = groupsOf(input);
   askRulesOf(settings); // refuse a malformed permissions block before changing anything
   const kept = groups.map((g) => ({ ...g, hooks: g.hooks.filter((h) => !isInboxHook(h.command)) })).filter((g) => g.hooks.length > 0);
-  const unhooked = rebuild(settings, hooks, kept);
-  return withAskRules(unhooked, askRulesOf(unhooked).ask.filter((rule) => rule !== SEND_ASK_RULE));
+  return rebuild(settings, hooks, kept);
+}
+
+/** Takes out the send rule. Only uninstall does this. */
+export function withoutAskRule(input: Json): Settings {
+  const { settings } = groupsOf(input);
+  return withAskRules(settings, askRulesOf(settings).ask.filter((rule) => rule !== SEND_ASK_RULE));
 }
 
 export function withHook(input: Json, command: string): Settings {
-  const cleared = withoutHook(input);
+  const cleared = withoutAskRule(withoutHook(input));
   const { settings, hooks, groups } = groupsOf(cleared);
   const hooked = rebuild(settings, hooks, [...groups, { hooks: [{ type: "command", command, timeout: 5 }] }]);
   return withAskRules(hooked, [...askRulesOf(hooked).ask, SEND_ASK_RULE]);
+}
+
+export function hasAskRule(input: Json): boolean {
+  try {
+    return askRulesOf(groupsOf(input).settings).ask.includes(SEND_ASK_RULE);
+  } catch {
+    return false;
+  }
 }
 
 /** Whether these settings already run the inbox hook, from any install path. */

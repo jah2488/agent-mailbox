@@ -21,8 +21,8 @@ relay=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --name) name="$2"; shift 2 ;;
-    --relay) relay="$2"; shift 2 ;;
+    --name) [ $# -ge 2 ] || { echo "--name needs a value, like --name \"Your Name\"" >&2; exit 2; }; name="$2"; shift 2 ;;
+    --relay) [ $# -ge 2 ] || { echo "--relay needs a value, like --relay https://your-relay.example" >&2; exit 2; }; relay="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,22 +68,36 @@ step "Installing dependencies"
 ok "Dependencies installed"
 
 mkdir -p "$bin_dir"
-ln -sf "$dir/bin/mailbox" "$bin_dir/mailbox"
 mailbox="$bin_dir/mailbox"
-ok "Command ready" "$bin_dir/mailbox"
+# Never replace a different program that happens to be called mailbox.
+if [ -e "$mailbox" ] && [ ! -L "$mailbox" ]; then
+  warn "$mailbox already exists and isn't ours; leaving it. Run this install's copy as $dir/bin/mailbox."
+  mailbox="$dir/bin/mailbox"
+else
+  ln -sf "$dir/bin/mailbox" "$mailbox"
+  ok "Command ready" "$mailbox"
+fi
 
+server="$dir/src/mcp-main.ts"
 if command -v claude > /dev/null; then
-  if claude mcp get agent-mailbox > /dev/null 2>&1; then
+  registered="$(claude mcp get agent-mailbox 2> /dev/null || true)"
+  if printf '%s\n' "$registered" | grep -qF "Args: $server"; then
     ok "Claude Code already has the mailbox tools"
   else
-    claude mcp add --scope user agent-mailbox -- node "$dir/src/mcp-main.ts" > /dev/null
+    # Missing, or pointing at another copy (an old install or a dev checkout): point it here.
+    [ -n "$registered" ] && claude mcp remove --scope user agent-mailbox > /dev/null 2>&1 || true
+    claude mcp add --scope user agent-mailbox -- node "$server" > /dev/null
     ok "Mailbox tools added to Claude Code"
   fi
-  # Without it, replies wait unseen until someone asks to check the mailbox.
-  "$mailbox" hook install > /dev/null
+else
+  warn "Claude Code not found. Once it's installed, run: claude mcp add --scope user agent-mailbox -- node $server"
+fi
+# Written even before Claude Code is installed, so the rule that every send asks first is already in place.
+if hook_error="$("$mailbox" hook install 2>&1 > /dev/null)"; then
   ok "Inbox hook on" "new mail is mentioned at your next prompt; every send asks you first"
 else
-  warn "Claude Code not found. Once it's installed, run: claude mcp add --scope user agent-mailbox -- node $dir/src/mcp-main.ts"
+  warn "Couldn't add the inbox hook: $hook_error"
+  warn "Fix ~/.claude/settings.json, then run: mailbox hook install"
 fi
 
 printf '\n  %s\n\n' "$(bold "Your identity")"

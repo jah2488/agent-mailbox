@@ -175,7 +175,7 @@ test("uninstall stops the daemon, unregisters the MCP server and removes the com
   assert.ok(io.calls.some((c) => c.join(" ") === "claude mcp remove --scope user agent-mailbox"));
   assert.deepEqual(await readdir(join(fakeHome, ".local", "bin")), []);
   assert.deepEqual(await readdir(io.launchAgents), []);
-  assert.deepEqual(JSON.parse(await readFile(io.claudeSettings, "utf8")), {});
+  assert.deepEqual(JSON.parse(await readFile(io.claudeSettings, "utf8")), {}, "uninstall removes the hook and the send rule");
   assert.ok((await readHome(bob.deps.dir)).me, "the identity and mail stay");
   assert.match(io.lines.join("\n"), /rm -rf/);
 });

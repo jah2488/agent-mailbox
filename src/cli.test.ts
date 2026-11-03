@@ -161,12 +161,18 @@ test("hook install merges the inbox hook into Claude settings, keeping a backup,
 
   assert.equal(await run(["hook", "install"], io), 0, io.errors.join("\n"));
   const installed = JSON.parse(await readFile(io.claudeSettings, "utf8"));
-  assert.deepEqual(installed.hooks.UserPromptSubmit, [{ hooks: [{ type: "command", command: "node /opt/agent-mailbox/src/hook.ts", timeout: 5 }] }]);
+  assert.deepEqual(installed.hooks.UserPromptSubmit, [{ hooks: [{ type: "command", command: 'node "/opt/agent-mailbox/src/hook.ts"', timeout: 5 }] }]);
   assert.deepEqual(installed.hooks.Stop, original.hooks.Stop);
   assert.deepEqual(JSON.parse(await readFile(`${io.claudeSettings}.agent-mailbox.bak`, "utf8")), original);
 
+  assert.equal(await run(["hook", "install"], io), 0);
+  assert.deepEqual(JSON.parse(await readFile(`${io.claudeSettings}.agent-mailbox.bak`, "utf8")), original, "the backup keeps the settings from before the first install");
+
   assert.equal(await run(["hook", "remove"], io), 0);
-  assert.deepEqual(JSON.parse(await readFile(io.claudeSettings, "utf8")), original);
+  const removed = JSON.parse(await readFile(io.claudeSettings, "utf8"));
+  assert.equal(removed.hooks.UserPromptSubmit, undefined);
+  assert.deepEqual(removed.permissions, { ask: ["mcp__agent-mailbox__mailbox_send"] }, "every send still asks first");
+  assert.match(io.lines.join("\n"), /still ask/);
 });
 
 test("hook install leaves a settings file it can't parse exactly as it was", async () => {
@@ -268,6 +274,7 @@ test("status shows who you are, your fingerprint, contacts, daemon and hook besi
   assert.match(text, /Daemon\s+off \(mailbox daemon start\)/);
   assert.match(text, /Certificate\s+good until \d{4}-\d{2}-\d{2}/);
   assert.match(text, /Inbox hook\s+on/);
+  assert.match(text, /Sends\s+ask you first/);
   assert.ok(!text.includes("\x1b"), "no color when io.color is false");
 });
 

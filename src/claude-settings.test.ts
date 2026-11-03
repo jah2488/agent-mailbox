@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withHook, withoutHook } from "./claude-settings.ts";
+import { hasAskRule, hasHook, withHook, withoutAskRule, withoutHook } from "./claude-settings.ts";
 
 const OURS = "node /opt/agent-mailbox/src/hook.ts";
 const theirs = { type: "command", command: "~/bin/other-hook.sh" };
@@ -27,7 +27,7 @@ test("an empty or missing settings file gets just the hook", () => {
 test("removing takes out only the inbox hook, and drops groups and keys it leaves empty", () => {
   const mixed = { hooks: { UserPromptSubmit: [{ hooks: [theirs, { type: "command", command: OURS }] }] } };
   assert.deepEqual(withoutHook(mixed), { hooks: { UserPromptSubmit: [{ hooks: [theirs] }] } });
-  assert.deepEqual(withoutHook(withHook({ model: "opus" }, OURS)), { model: "opus" });
+  assert.deepEqual(withoutAskRule(withoutHook(withHook({ model: "opus" }, OURS))), { model: "opus" });
 });
 
 test("settings whose hooks aren't the documented shape are refused, never rewritten", () => {
@@ -45,9 +45,19 @@ test("installing also makes every mailbox send ask first, keeping existing permi
   assert.deepEqual((withHook(after, OURS) as { permissions: { ask: string[] } }).permissions.ask, ["Bash(git push:*)", SEND], "no duplicate");
 });
 
-test("removing takes the send rule out too, leaving other rules and dropping what it empties", () => {
-  assert.deepEqual(withoutHook(withHook({ permissions: { ask: ["Bash(git push:*)"] } }, OURS)), { permissions: { ask: ["Bash(git push:*)"] } });
-  assert.deepEqual(withoutHook(withHook({}, OURS)), {});
+test("removing the hook keeps the send rule; removing the send rule leaves other rules and drops what it empties", () => {
+  const installed = withHook({ permissions: { ask: ["Bash(git push:*)"] } }, OURS);
+  assert.deepEqual(withoutHook(installed), { permissions: { ask: ["Bash(git push:*)", SEND] } });
+  assert.deepEqual(withoutAskRule(withoutHook(installed)), { permissions: { ask: ["Bash(git push:*)"] } });
+  assert.deepEqual(withoutAskRule(withoutHook(withHook({}, OURS))), {});
+  assert.equal(hasAskRule(installed), true);
+  assert.equal(hasAskRule(withoutAskRule(installed)), false);
+});
+
+test("a hook installed with a quoted path is still recognised as ours", () => {
+  const quoted = 'node "/Users/a b/.local/share/agent-mailbox/src/hook.ts"';
+  assert.equal(hasHook(withHook({}, quoted)), true);
+  assert.deepEqual(withoutAskRule(withoutHook(withHook({}, quoted))), {});
 });
 
 test("a send allow-listed by the user is left alone: the ask rule still wins over it", () => {

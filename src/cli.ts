@@ -2,7 +2,7 @@ import { mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promis
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { renderStatus, styles, type Fact } from "./banner.ts";
-import { hasHook, withHook, withoutHook } from "./claude-settings.ts";
+import { hasAskRule, hasHook, withHook, withoutAskRule, withoutHook } from "./claude-settings.ts";
 import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
@@ -279,34 +279,43 @@ function install(io: CliIo): number {
  * previous file is kept beside it as .agent-mailbox.bak.
  */
 export async function hookCommand(action: string | undefined, io: CliIo): Promise<number> {
-  if (action !== "install" && action !== "remove") {
+  if (action !== "install" && action !== "remove" && action !== "uninstall") {
     io.err("usage: mailbox hook install|remove");
     return 2;
   }
   const path = io.claudeSettings;
   const before = await readFile(path, "utf8").catch(() => null);
-  if (before === null && action === "remove") return 0;
+  if (before === null && action !== "install") return 0;
+  let current: unknown;
   let next: unknown;
   try {
-    const current: unknown = before === null ? {} : JSON.parse(before);
-    next = action === "install" ? withHook(current, `node ${io.repoRoot}/src/hook.ts`) : withoutHook(current);
+    current = before === null ? {} : JSON.parse(before);
+    // Quoted, because Claude Code runs it through a shell and an install path can contain spaces.
+    next = action === "install" ? withHook(current, `node "${io.repoRoot}/src/hook.ts"`) : action === "remove" ? withoutHook(current) : withoutAskRule(withoutHook(current));
   } catch (error) {
     io.err(`left ${path} unchanged: ${error instanceof SyntaxError ? "settings.json is not valid JSON" : (error as Error).message}`);
     return 1;
   }
   await mkdir(dirname(path), { recursive: true });
-  if (before !== null) await writeFile(`${path}.agent-mailbox.bak`, before);
+  // Only the first install keeps a backup, so it always holds the settings from before agent-mailbox touched them.
+  if (before !== null && !hasHook(current) && !hasAskRule(current)) await writeFile(`${path}.agent-mailbox.bak`, before);
   const tmp = `${path}.agent-mailbox.tmp`;
   await writeFile(tmp, JSON.stringify(next, null, 2) + "\n");
   await rename(tmp, path);
-  io.out(action === "install" ? "Inbox hook on: Claude Code mentions new mail at the start of each prompt." : "Inbox hook removed from Claude Code.");
+  io.out(
+    action === "install"
+      ? "Inbox hook on: Claude Code mentions new mail at the start of each prompt, and every send asks you first."
+      : action === "remove"
+        ? "Inbox hook removed. Sends still ask you first."
+        : "Inbox hook and the send approval rule removed from Claude Code.",
+  );
   return 0;
 }
 
 /** Turns everything off that install set up. Keys, mail and the audit log stay until the owner deletes them. */
 export async function uninstall(io: CliIo): Promise<number> {
   if ((await daemonStop(io)) !== 0) io.err("no mailbox identity here, so there was no daemon to stop");
-  await hookCommand("remove", io);
+  await hookCommand("uninstall", io);
   const mcp = await io.exec("claude", ["mcp", "remove", "--scope", "user", "agent-mailbox"]);
   io.out(mcp.code === 0 ? "Removed the agent-mailbox MCP server from Claude Code." : "The agent-mailbox MCP server was not registered with Claude Code.");
   const link = join(io.env["HOME"] ?? "", ".local", "bin", "mailbox");
@@ -386,6 +395,7 @@ async function status(io: CliIo): Promise<number> {
               : `good until ${new Date(expires).toISOString().slice(0, 10)}`,
     },
     { key: "Inbox hook", value: hasHook(settings) ? "on" : "off (mailbox hook install)" },
+    { key: "Sends", value: hasAskRule(settings) ? "ask you first" : "NOT checked with you (mailbox hook install)", strong: !hasAskRule(settings) },
     ...(version.code === 0 && version.output !== "" ? [{ key: "Version", value: version.output }] : []),
   ];
   const title = `${home.me.name.toLowerCase().replace(/\s+/g, "-")}@agent-mailbox`;
