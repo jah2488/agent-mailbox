@@ -159,3 +159,28 @@ test("an ask synced after setup but before this daemon process started is still 
 
   assert.equal((await receive(alice.deps, { reply_to: asked.ref })).messages.length, 1);
 });
+
+test("only one daemon runs per mailbox home, so two can never interleave the audit log", async (t) => {
+  const { bob } = await world();
+  await setUp(bob);
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  const first = { ...ioFor(bob), stop: stop.signal };
+  const running = run(["daemon", "run"], first);
+  while (!first.lines.some((l) => l.startsWith("started"))) await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const second = ioFor(bob);
+  assert.equal(await run(["daemon", "once"], second), 1);
+  assert.match(second.errors.join("\n"), /already running/);
+
+  stop.abort();
+  assert.equal(await running, 0);
+  assert.equal(await run(["daemon", "once"], ioFor(bob)), 0);
+});
+
+test("a lock left by a daemon that died is taken over", async () => {
+  const { bob } = await world();
+  const io = await setUp(bob);
+  await writeFile(join(bob.deps.dir, "daemon.lock"), "999999999\n");
+  assert.equal(await run(["daemon", "once"], io), 0, io.errors.join("\n"));
+});

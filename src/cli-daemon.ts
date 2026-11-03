@@ -6,7 +6,7 @@ import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./au
 import { certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
 import type { CliIo } from "./cli.ts";
 import type { ClientDeps } from "./client.ts";
-import { initDaemonFiles, loadPolicy, readCert, readResponder, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
+import { acquireDaemonLock, initDaemonFiles, loadPolicy, readCert, readResponder, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
@@ -121,12 +121,21 @@ async function runOnce(io: CliIo, forever: boolean): Promise<number> {
     io.err("no daemon start point recorded; run: mailbox daemon setup");
     return 1;
   }
-  const deps = daemonDeps(io, home, loaded, since, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
-  await deps.audit({ kind: "started", data: { agent: loaded.name, mode: forever ? "run" : "once" } });
-  if (forever) await runDaemon(deps, { intervalMs: INTERVAL_MS, signal: io.stop, log: io.err });
-  else await tick(deps, fresh);
-  await deps.audit({ kind: "stopped", data: {} });
-  return 0;
+  const release = await acquireDaemonLock(io.deps.dir);
+  if (release === null) {
+    io.err(`a daemon is already running for ${home.me.name}; stop it first (launchctl bootout, or Ctrl-C)`);
+    return 1;
+  }
+  try {
+    const deps = daemonDeps(io, home, loaded, since, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
+    await deps.audit({ kind: "started", data: { agent: loaded.name, mode: forever ? "run" : "once" } });
+    if (forever) await runDaemon(deps, { intervalMs: INTERVAL_MS, signal: io.stop, log: io.err });
+    else await tick(deps, fresh);
+    await deps.audit({ kind: "stopped", data: {} });
+    return 0;
+  } finally {
+    await release();
+  }
 }
 
 async function findOnPath(program: string, path: string): Promise<string | null> {

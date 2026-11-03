@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SignedCert } from "./cert.ts";
 import { writeJson } from "./home.ts";
@@ -105,4 +105,36 @@ export async function readResponder(dir: string): Promise<ResponderConfig> {
     throw new Error(`${RESPONDER} must be {"command": ["program", "arg", ...]}`);
   }
   return { command };
+}
+
+const LOCK = "daemon.lock";
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/**
+ * One daemon per mailbox home: two would answer the same ask twice and
+ * interleave the audit chain. Returns a release function, or null when a
+ * live daemon holds the lock. A lock whose process has died is taken over.
+ */
+export async function acquireDaemonLock(dir: string): Promise<(() => Promise<void>) | null> {
+  const path = join(dir, LOCK);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await writeFile(path, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+      return () => rm(path, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const holder = Number((await readText(path))?.trim());
+      if (Number.isSafeInteger(holder) && holder > 0 && alive(holder)) return null;
+      await rm(path, { force: true });
+    }
+  }
+  return null;
 }
