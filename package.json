@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cedar-policy/cedar-wasm": "4.14.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@netlify/blobs": "11.1.7",
     "libsodium-wrappers": "0.7.15",
