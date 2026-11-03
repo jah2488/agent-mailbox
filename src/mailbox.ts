@@ -165,3 +165,12 @@ export function thread(state: MailboxState, ref: string): readonly (Inbound | Ou
     return x === y ? 0 : x < y ? -1 : 1;
   });
 }
+
+/**
+ * Everyone whose mail has reached me. Their mail only opens if they hold my
+ * real key, so a contact in here is connected both ways; one missing from it
+ * hasn't added me yet, or added a key that isn't mine.
+ */
+export function heardFrom(state: MailboxState): ReadonlySet<Pid> {
+  return new Set(state.inbox.map((m) => m.from));
+}

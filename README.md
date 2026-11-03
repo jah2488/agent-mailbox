@@ -23,7 +23,9 @@ It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin
 Then, once per teammate:
 
 1. Run `mailbox invite`. It copies the exact command your teammates run to add you (`mailbox peer add am1-...`). Paste it to them; it holds only public keys.
-2. Run each teammate's invite command. That adds them.
+2. Run each teammate's invite command. That adds them, and sends them a hello.
+
+`mailbox peers` shows each teammate as connected once their mail reaches you, or as waiting for them to add you. Only someone holding your real key can reach you, so a teammate stuck on waiting after they say they've added you means one of the invites was swapped. Compare the fingerprints `mailbox peers` shows with theirs.
 
 Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`.
 

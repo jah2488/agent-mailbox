@@ -340,3 +340,54 @@ test("update refuses in a development checkout, where the installer would strip 
   assert.deepEqual(io.calls, []);
   assert.match(io.errors.join("\n"), /development checkout/);
 });
+
+// ---- Two-way connections ----
+
+const inviteOf = async (person: Person) => {
+  const io = ioFor(person);
+  await run(["invite", "--print"], io);
+  return io.lines[0]!.replace(/^mailbox /, "").split(" ");
+};
+
+test("adding someone tells them, and each side shows 'waiting' until the other has added them too", async () => {
+  const { bob, mallory } = await world();
+  const bobs = ioFor(bob);
+  assert.equal(await run(await inviteOf(mallory), bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /Told Mallory you added them/);
+
+  bobs.lines.length = 0;
+  await run(["peers"], bobs);
+  assert.match(bobs.lines.join("\n"), /Mallory\s.*waiting for them to add you/);
+
+  // Mallory adds Bob back (pasting his invite), which sends Bob her hello.
+  await run(await inviteOf(bob), ioFor(mallory));
+  bobs.lines.length = 0;
+  await run(["peers"], bobs);
+  assert.match(bobs.lines.join("\n"), /Mallory\s.*connected/);
+});
+
+test("a swapped invite never connects: the person you meant to add stays 'waiting'", async () => {
+  const { alice, bob, mallory } = await world();
+  // Bob thinks he's adding Alice, but the invite carries Mallory's key under Alice's name.
+  const swapped = (await inviteOf(mallory)).map((part) => {
+    if (!part.startsWith("am1-")) return part;
+    const entry = JSON.parse(Buffer.from(part.slice(4), "base64url").toString()) as Record<string, unknown>;
+    return "am1-" + Buffer.from(JSON.stringify({ ...entry, name: "Alicia" })).toString("base64url");
+  });
+  const bobs = ioFor(bob);
+  await run(swapped, bobs);
+  // Alice adds the real Bob, and her hello reaches him; the impostor never answers.
+  await run(await inviteOf(bob), ioFor(alice));
+  bobs.lines.length = 0;
+  await run(["peers"], bobs);
+  assert.match(bobs.lines.join("\n"), /Alice\s.*connected/);
+  assert.match(bobs.lines.join("\n"), /Alicia\s.*waiting for them to add you/);
+});
+
+test("the status panel marks contacts still waiting", async () => {
+  const { bob, mallory } = await world();
+  await run(await inviteOf(mallory), ioFor(bob));
+  const io = ioFor(bob);
+  await run(["status"], io);
+  assert.match(io.lines.join("\n"), /Contacts\s+Alice \(waiting\), Mallory \(waiting\)|Contacts\s+.*Mallory \(waiting\)/);
+});

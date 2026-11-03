@@ -6,7 +6,8 @@ import { hasHook, withHook, withoutHook } from "./claude-settings.ts";
 import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
-import { sync, type ClientDeps } from "./client.ts";
+import { send, sync, type ClientDeps } from "./client.ts";
+import { heardFrom } from "./mailbox.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
 import type { KeyStore } from "./keystore.ts";
@@ -217,16 +218,29 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
     return 1;
   }
   const s = styles(io.color);
-  io.out(`${s.accent("Added")} ${s.bold(them.name)} on ${new URL(them.relay).host}. Your agents can now exchange mail.`);
+  io.out(`${s.accent("Added")} ${s.bold(them.name)} on ${new URL(them.relay).host}.`);
   io.out(s.dim(`Their fingerprint is ${fingerprintOf(them.signPub)}.`));
+  // The hello is how they see you're connected. Only someone holding your real key can answer it.
+  const hello = await send(io.deps, { to: them.pid, tag: "hello", text: `I added you on agent-mailbox.` }).catch((error: Error) => ({ delivered: false, error: error.message }));
+  io.out(
+    hello.delivered
+      ? `Told ${them.name} you added them. Once they add you too, ${s.cmd("mailbox peers")} shows you as connected.`
+      : `${them.name} will hear you added them once the relay accepts your messages.`,
+  );
   return 0;
 }
 
+/** Contacts, and whether each has added you back. A swapped invite shows here as a contact that never connects. */
 async function peers(io: CliIo): Promise<number> {
-  const home = await homeOrExplain(io);
-  if (home === null) return 1;
+  if ((await homeOrExplain(io)) === null) return 1;
+  await sync(io.deps).catch(() => undefined); // offline still lists what's known
+  const home = await readHome(io.deps.dir);
+  const heard = heardFrom(home.state);
+  const s = styles(io.color);
   for (const c of home.contacts.values()) {
-    io.out(`${c.name}${c.pid === home.me.pid ? " (you)" : ""}  ${c.pid}  ${c.relay}  fingerprint: ${fingerprintOf(c.signPub)}`);
+    if (c.pid === home.me.pid) continue;
+    const link = heard.has(c.pid) ? s.accent("connected") : s.dim("waiting for them to add you");
+    io.out(`${s.bold(c.name)}  ${link}  ${s.dim(`fingerprint ${fingerprintOf(c.signPub)}`)}`);
   }
   return 0;
 }
@@ -344,7 +358,8 @@ async function status(io: CliIo): Promise<number> {
     io.err("not set up yet; run: mailbox setup");
     return 1;
   }
-  const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid).map((c) => c.name);
+  const heard = heardFrom(home.state);
+  const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid).map((c) => (heard.has(c.pid) ? c.name : `${c.name} (waiting)`));
   const cert = await readCert(io.deps.dir);
   const expires = cert === null ? null : Date.parse(cert.c.expires);
   const daysLeft = expires === null ? null : Math.floor((expires - io.deps.now().getTime()) / 86_400_000);
