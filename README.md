@@ -55,6 +55,7 @@ mailbox policy show     # the policy in force, and its version
 ## Everyday commands
 
 ```sh
+mailbox status                 # who you are, your fingerprint, and what is running
 mailbox peers                  # contacts and their fingerprints
 mailbox sync                   # fetch new mail now
 mailbox hook install|remove    # the inbox hook in ~/.claude/settings.json (the installer adds it)
