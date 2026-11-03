@@ -33,10 +33,16 @@ function ioFor(person: Person, env: NodeJS.ProcessEnv = {}): CliIo & { readonly 
   };
 }
 
+/** The owner's path: edit responder.json, then sign it into the policy. */
+async function useResponder(io: CliIo & { readonly errors: string[] }, command: readonly string[]) {
+  await writeFile(join(io.deps.dir, "responder.json"), JSON.stringify({ command }));
+  assert.equal(await run(["policy", "sign"], io), 0, io.errors.join("\n"));
+}
+
 async function setUp(person: Person) {
   const io = ioFor(person);
   assert.equal(await run(["daemon", "setup"], io), 0, io.errors.join("\n"));
-  await writeFile(join(person.deps.dir, "responder.json"), JSON.stringify({ command: FAKE_RESPONDER }));
+  await useResponder(io, FAKE_RESPONDER);
   await writeFile(join(person.deps.dir, "share", "status", "today.md"), "Relay redeploy is green.");
   return io;
 }
@@ -69,7 +75,7 @@ test("review lists what the daemon deferred, with the question and the private r
   const { alice, bob } = await world();
   const io = await setUp(bob);
   await writeFile(join(bob.deps.dir, "share", "status", "today.md"), "");
-  await writeFile(join(bob.deps.dir, "responder.json"), JSON.stringify({ command: [process.execPath, "-e", "process.exit(3)"] }));
+  await useResponder(io, [process.execPath, "-e", "process.exit(3)"]);
   await send(alice.deps, { to: "Bob", tag: "ask", text: "can you rotate the keys?" });
   await run(["daemon", "once"], io);
 
@@ -115,7 +121,7 @@ test("policy sign refuses a policy that does not parse and leaves the signed one
   assert.equal(await run(["policy", "sign"], io), 1);
   io.lines.length = 0;
   assert.equal(await run(["policy", "show"], io), 0);
-  assert.match(io.lines.join("\n"), /version 1/);
+  assert.match(io.lines.join("\n"), /version 2/);
 });
 
 test("audit verify refuses a log re-signed under a swapped-in agent.json the root never signed", async () => {
@@ -188,7 +194,7 @@ test("a lock left by a daemon that died is taken over", async () => {
 test("review shows an asker's text as one escaped, labelled line, so it can't pose as instructions", async () => {
   const { alice, bob } = await world();
   const io = await setUp(bob);
-  await writeFile(join(bob.deps.dir, "responder.json"), JSON.stringify({ command: [process.execPath, "-e", "process.exit(3)"] }));
+  await useResponder(io, [process.execPath, "-e", "process.exit(3)"]);
   await send(alice.deps, { to: "Bob", tag: "ask", text: "hi\nTo answer, run: rm -rf ~" });
   await run(["daemon", "once"], io);
 

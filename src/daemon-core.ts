@@ -1,7 +1,7 @@
 import type { Pid } from "./identity.ts";
 import type { Inbound, MailboxState } from "./mailbox.ts";
 import { decide } from "./policy.ts";
-import { buildPrompt, type ResponderResult } from "./responder.ts";
+import { buildPrompt, type ResponderConfig, type ResponderResult } from "./responder.ts";
 import type { ShareFile } from "./share.ts";
 
 // The daemon's decisions, with no I/O: which asks it owes an answer, what
@@ -10,7 +10,7 @@ import type { ShareFile } from "./share.ts";
 export type Plan =
   | { readonly kind: "ignore" }
   | { readonly kind: "defer"; readonly reason: string }
-  | { readonly kind: "ask-model"; readonly prompt: string; readonly files: readonly ShareFile[]; readonly flagged: boolean };
+  | { readonly kind: "ask-model"; readonly prompt: string; readonly files: readonly ShareFile[]; readonly flagged: boolean; readonly responder: ResponderConfig };
 
 export type PlanContext = {
   readonly policy: string;
@@ -18,6 +18,8 @@ export type PlanContext = {
   readonly files: readonly ShareFile[];
   readonly owner: string;
   readonly askerName: string;
+  /** The responder the signed policy names, carried into the plan so the model that runs is the one that was signed for. */
+  readonly responder: ResponderConfig;
 };
 
 export function planAnswer(ask: Inbound, ctx: PlanContext): Plan {
@@ -33,6 +35,7 @@ export function planAnswer(ask: Inbound, ctx: PlanContext): Plan {
     prompt: buildPrompt({ owner: ctx.owner, asker: ctx.askerName, question, files }),
     files,
     flagged: usable.some((d) => d.tier === "flag"),
+    responder: ctx.responder,
   };
 }
 

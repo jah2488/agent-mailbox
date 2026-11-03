@@ -3,7 +3,8 @@ import { join } from "node:path";
 import type { SignedCert } from "./cert.ts";
 import { writeJson } from "./home.ts";
 import type { Identity, Peer } from "./identity.ts";
-import { DEFAULT_POLICY, policyParses, signPolicy, verifyPolicy, type SignedPolicy } from "./policy.ts";
+import { canonicalize } from "./canonical.ts";
+import { DEFAULT_POLICY, isCommand, policyParses, signPolicy, verifyPolicy, type SignedPolicy } from "./policy.ts";
 import { DEFAULT_RESPONDER, type ResponderConfig } from "./responder.ts";
 import sodium from "./sodium.ts";
 
@@ -75,15 +76,17 @@ export async function signPolicyFile(dir: string, root: Identity): Promise<{ rea
   const text = await readText(join(dir, POLICY_TEXT));
   if (text === null) return { ok: false, error: `no ${POLICY_TEXT}; run: mailbox daemon setup` };
   if (!policyParses(text)) return { ok: false, error: `${POLICY_TEXT} does not parse as Cedar; nothing was signed` };
+  const responder = await readResponderFile(dir);
+  if (!responder.ok) return responder;
   const version = Math.max((await readSigned(dir))?.p.version ?? 0, await floorOf(dir)) + 1;
-  await writeJson(join(dir, POLICY), signPolicy(root, version, text));
+  await writeJson(join(dir, POLICY), signPolicy(root, version, text, responder.command));
   return { ok: true, version };
 }
 
 /** A verified policy, with the hash every decision records so a later reader knows exactly which rules applied. */
-export type LoadedPolicy = { readonly ok: true; readonly cedar: string; readonly version: number; readonly hash: string } | { readonly ok: false; readonly error: string };
+export type LoadedPolicy = { readonly ok: true; readonly cedar: string; readonly version: number; readonly responder: ResponderConfig; readonly hash: string } | { readonly ok: false; readonly error: string };
 
-const policyHash = (cedar: string) => "b2:" + sodium.to_hex(sodium.crypto_generichash(32, new TextEncoder().encode(cedar)));
+const policyHash = (signed: SignedPolicy) => "b2:" + sodium.to_hex(sodium.crypto_generichash(32, new TextEncoder().encode(canonicalize(signed.p))));
 
 /** The verified policy text, raising the floor when a newer version appears. */
 export async function loadPolicy(dir: string, root: Peer): Promise<LoadedPolicy> {
@@ -93,18 +96,16 @@ export async function loadPolicy(dir: string, root: Peer): Promise<LoadedPolicy>
   const verified = verifyPolicy(signed, root, floor);
   if (!verified.ok) return verified;
   if (verified.version > floor) await writeFile(join(dir, POLICY_FLOOR), `${verified.version}\n`, { mode: 0o600 });
-  return { ...verified, hash: policyHash(verified.cedar) };
+  const responder = verified.responder === null ? DEFAULT_RESPONDER : { command: verified.responder };
+  return { ok: true, cedar: verified.cedar, version: verified.version, responder, hash: policyHash(signed) };
 }
 
-/** The responder command: responder.json when present, otherwise the locked-down `claude -p`. */
-export async function readResponder(dir: string): Promise<ResponderConfig> {
+/** The owner's responder.json, read only when signing. The daemon itself only ever sees the signed copy. */
+async function readResponderFile(dir: string): Promise<{ readonly ok: true; readonly command?: readonly string[] } | { readonly ok: false; readonly error: string }> {
   const value = await readJson(join(dir, RESPONDER));
-  if (value === null) return DEFAULT_RESPONDER;
+  if (value === null) return { ok: true };
   const command = (value as { command?: unknown } | undefined)?.command;
-  if (!Array.isArray(command) || command.length === 0 || !command.every((part) => typeof part === "string")) {
-    throw new Error(`${RESPONDER} must be {"command": ["program", "arg", ...]}`);
-  }
-  return { command };
+  return isCommand(command) ? { ok: true, command } : { ok: false, error: `${RESPONDER} must be {"command": ["program", "arg", ...]}; nothing was signed` };
 }
 
 const LOCK = "daemon.lock";

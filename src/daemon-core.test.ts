@@ -4,6 +4,7 @@ import { findSecrets, planAnswer, settleAnswer, unanswered } from "./daemon-core
 import { generateIdentity } from "./identity.ts";
 import { emptyState, type Inbound, type MailboxState, type Outbound } from "./mailbox.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
+import { DEFAULT_RESPONDER } from "./responder.ts";
 
 const me = generateIdentity();
 const ada = generateIdentity();
@@ -30,7 +31,7 @@ const ask = (over: Partial<Inbound> = {}, body: Partial<Inbound["body"]> = {}): 
   body: { tag: "ask", ref: "q1", payload: null, prose: "what are you on?", ...body },
 });
 
-const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada" };
+const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada", responder: DEFAULT_RESPONDER };
 
 test("an ask is answered only from files policy allows, and flagged if any of them is flag-tier", () => {
   const plan = planAnswer(ask(), ctx);

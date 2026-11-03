@@ -6,7 +6,7 @@ import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./au
 import { certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
 import type { CliIo } from "./cli.ts";
 import type { ClientDeps } from "./client.ts";
-import { acquireDaemonLock, initDaemonFiles, loadPolicy, readCert, readResponder, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
+import { acquireDaemonLock, initDaemonFiles, loadPolicy, readCert, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
@@ -65,7 +65,7 @@ function daemonDeps(io: CliIo, home: Home, loaded: Loaded, since: string, report
     client: loaded.client,
     policy: () => loadPolicy(dir, home.me),
     share: async () => (await readShare(shareDir(dir))).files,
-    respond: async (prompt) => runResponder(await readResponder(dir), prompt),
+    respond: (prompt, responder) => runResponder(responder, prompt),
     audit: async (event) => {
       await appendAudit(dir, loaded.audit.signSec, event);
       report(event);
@@ -155,7 +155,12 @@ async function install(io: CliIo): Promise<number> {
   if ((await loadAgent(io, home)) === null) return 1;
   const label = `com.agent-mailbox.daemon.${home.me.pid}`;
   const plistPath = join(io.deps.dir, `${label}.plist`);
-  const responder = (await readResponder(io.deps.dir)).command[0]!;
+  const policy = await loadPolicy(io.deps.dir, home.me);
+  if (!policy.ok) {
+    io.err(`no policy in force (${policy.error}); run: mailbox policy sign`);
+    return 1;
+  }
+  const responder = policy.responder.command[0]!;
   const found = responder.includes("/") ? responder : await findOnPath(responder, io.env["PATH"] ?? "");
   // launchd starts with a bare PATH, so the responder's directory is carried over explicitly.
   const path = [...new Set([...(found === null ? [] : [dirname(found)]), "/usr/bin", "/bin"])].join(delimiter);

@@ -3,13 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPolicy, readResponder, signPolicyFile } from "./daemon-files.ts";
+import { loadPolicy, signPolicyFile } from "./daemon-files.ts";
 import { generateIdentity, toPeer } from "./identity.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { DEFAULT_RESPONDER } from "./responder.ts";
 
 const root = generateIdentity();
 const home = () => mkdtemp(join(tmpdir(), "mailbox-daemon-files-"));
+async function responderOf(dir: string) {
+  const loaded = await loadPolicy(dir, toPeer(root));
+  assert.ok(loaded.ok, JSON.stringify(loaded));
+  return loaded.responder;
+}
 
 test("a signed policy loads; an older one put back afterwards is refused", async () => {
   const dir = await home();
@@ -41,15 +46,29 @@ test("a policy that does not parse is never signed", async () => {
   assert.deepEqual(await loadPolicy(dir, toPeer(root)), { ok: false, error: "no signed policy; run: mailbox policy sign" });
 });
 
-test("the responder is the default claude -p command unless responder.json names another", async () => {
+test("the responder is the default claude -p command unless a signed policy names another", async () => {
   const dir = await home();
-  assert.deepEqual(await readResponder(dir), DEFAULT_RESPONDER);
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
+  await signPolicyFile(dir, root);
+  assert.deepEqual(await responderOf(dir), DEFAULT_RESPONDER);
   await writeFile(join(dir, "responder.json"), JSON.stringify({ command: ["my-model", "--quiet"] }));
-  assert.deepEqual(await readResponder(dir), { command: ["my-model", "--quiet"] });
+  await signPolicyFile(dir, root);
+  assert.deepEqual(await responderOf(dir), { command: ["my-model", "--quiet"] });
 });
 
-test("a malformed responder.json is an error, never a silent fallback", async () => {
+test("editing responder.json changes nothing until the root re-signs", async () => {
   const dir = await home();
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
+  await signPolicyFile(dir, root);
+  await writeFile(join(dir, "responder.json"), JSON.stringify({ command: ["/tmp/evil"] }));
+  assert.deepEqual(await responderOf(dir), DEFAULT_RESPONDER);
+});
+
+test("a malformed responder.json is never signed", async () => {
+  const dir = await home();
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
   await writeFile(join(dir, "responder.json"), JSON.stringify({ command: "rm -rf /" }));
-  await assert.rejects(readResponder(dir), /responder\.json/);
+  const signed = await signPolicyFile(dir, root);
+  assert.equal(signed.ok, false);
+  assert.match((signed as { error: string }).error, /responder\.json/);
 });

@@ -5,7 +5,7 @@ import { planAnswer, settleAnswer, unanswered, type Plan } from "./daemon-core.t
 import type { LoadedPolicy } from "./daemon-files.ts";
 import { readHome } from "./home.ts";
 import type { Inbound } from "./mailbox.ts";
-import type { ResponderResult } from "./responder.ts";
+import type { ResponderConfig, ResponderResult } from "./responder.ts";
 import type { ShareFile } from "./share.ts";
 
 // The daemon's imperative shell: one tick syncs, works out which asks it
@@ -19,7 +19,8 @@ export type DaemonDeps = {
   /** The verified policy, or why it could not be loaded. Read every tick so a re-signed policy applies without a restart. */
   readonly policy: () => Promise<LoadedPolicy>;
   readonly share: () => Promise<readonly ShareFile[]>;
-  readonly respond: (prompt: string) => Promise<ResponderResult>;
+  /** Runs the responder the signed policy names. */
+  readonly respond: (prompt: string, responder: ResponderConfig) => Promise<ResponderResult>;
   readonly audit: (event: AuditEvent) => Promise<void>;
   /** Asks received before this were the owner's to see; the daemon leaves them alone. */
   readonly since: string;
@@ -49,7 +50,7 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
     const key = keyOf(ask);
     const askerName = home.contacts.get(ask.from)?.name ?? ask.from;
     const plan: Plan = policy.ok
-      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName })
+      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder })
       : { kind: "defer", reason: `policy unavailable: ${policy.error}` };
     const about = { ref: ask.body.ref, from: ask.from };
     try {
@@ -67,7 +68,7 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
         done.add(key);
         continue;
       }
-      const result = plan.kind === "defer" ? plan : (drafts.get(key) ?? settleAnswer(await deps.respond(plan.prompt)));
+      const result = plan.kind === "defer" ? plan : (drafts.get(key) ?? settleAnswer(await deps.respond(plan.prompt, plan.responder)));
       drafts.set(key, result);
       const sent =
         result.kind === "answer"

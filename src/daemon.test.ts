@@ -4,7 +4,7 @@ import type { AuditEvent } from "./audit.ts";
 import { receive, send } from "./client.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
-import type { ResponderResult } from "./responder.ts";
+import { DEFAULT_RESPONDER, type ResponderResult } from "./responder.ts";
 import type { ShareFile } from "./share.ts";
 import { daemonOf, world, type Person } from "./test-world.ts";
 
@@ -15,7 +15,7 @@ async function daemonFor(person: Person, options: { readonly files?: readonly Sh
   const prompts: string[] = [];
   const deps: DaemonDeps = {
     client: await daemonOf(person),
-    policy: async () => ({ ok: true, cedar: DEFAULT_POLICY, version: 7, hash: "b2:policy" }),
+    policy: async () => ({ ok: true, cedar: DEFAULT_POLICY, version: 7, responder: DEFAULT_RESPONDER, hash: "b2:policy" }),
     share: async () => options.files ?? [STATUS],
     respond: async (prompt) => {
       prompts.push(prompt);
@@ -133,7 +133,7 @@ test("the loop outlives a failing tick and stops when aborted", async () => {
     policy: async () => {
       policyCalls++;
       if (policyCalls === 1) throw new Error("disk hiccup");
-      return { ok: true, cedar: DEFAULT_POLICY, version: 7, hash: "b2:policy" };
+      return { ok: true, cedar: DEFAULT_POLICY, version: 7, responder: DEFAULT_RESPONDER, hash: "b2:policy" };
     },
   };
   await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });

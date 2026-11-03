@@ -50,3 +50,9 @@ test("an edited policy, another root's policy, or an older version is refused", 
 test("a policy that does not parse is refused at verify time, before it can be used", () => {
   assert.deepEqual(verifyPolicy(signPolicy(justin, 1, "permit(oops"), toPeer(justin), 0).ok, false);
 });
+
+test("a signed responder must be a program and arguments, even when the root signed it", () => {
+  assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, ["claude", "-p"]), toPeer(justin), 0).ok, true);
+  assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, [""]), toPeer(justin), 0), { ok: false, error: "policy responder is not a command" });
+  assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, [] as string[]), toPeer(justin), 0), { ok: false, error: "policy responder is not a command" });
+});
