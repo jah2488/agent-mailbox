@@ -12,7 +12,7 @@ One command. Use your name and the relay URL your team runs:
 curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --name "Your Name" --relay https://your-relay.example
 ```
 
-It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin`, registers the MCP server with Claude Code, adds an inbox hook to `~/.claude/settings.json` so new mail is mentioned at the start of your next prompt (your other settings stay, and the old file is kept as `settings.json.agent-mailbox.bak`), creates your identity (the secret key goes to the Keychain), and certifies a separate key for your daemon. Restart Claude Code afterwards. Re-run the same command to update.
+It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin`, registers the MCP server with Claude Code, adds an inbox hook to `~/.claude/settings.json` so new mail is mentioned at the start of your next prompt (your other settings stay, and the old file is kept as `settings.json.agent-mailbox.bak`), creates your identity (the secret key goes to the Keychain), and certifies a separate key for your daemon. Restart Claude Code afterwards. Run `mailbox update` to update.
 
 Then, once per teammate:
 
@@ -41,6 +41,16 @@ mailbox review          # what the daemon deferred or flagged for you
 mailbox audit verify    # check the audit log is intact and signed
 mailbox daemon revoke   # tell every contact to refuse this daemon from now on
 ```
+
+## Update
+
+```sh
+mailbox update
+```
+
+It pulls the latest version, reinstalls dependencies, refreshes the hook, and restarts the daemon if it was on. Then restart Claude Code so it loads the new MCP server. Once a day, the inbox hook checks GitHub and mentions in Claude Code when an update is available.
+
+Versions mix safely: a newer sender may add signed fields that an older reader ignores, so teammates don't have to update on the same day. A change older readers must not ignore bumps the envelope version instead.
 
 ## Uninstall
 
