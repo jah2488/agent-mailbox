@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { access, constants, mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -156,6 +157,16 @@ export async function daemonInstalled(io: CliIo, home: Home): Promise<boolean> {
   return access(join(io.launchAgents, `${labelOf(home)}.plist`)).then(() => true, () => false);
 }
 
+/** Whether launchd reports the job running, giving it a few seconds to start. */
+async function runningSoon(io: CliIo, label: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const job = await io.exec("launchctl", ["print", `${guiDomain()}/${label}`]);
+    if (job.code === 0 && /^\s*state = running$/m.test(job.output)) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
 /** Writes the launchd plist and loads it, so the daemon runs now and at every login. */
 async function start(io: CliIo): Promise<number> {
   const home = await homeOf(io);
@@ -201,6 +212,11 @@ async function start(io: CliIo): Promise<number> {
   const loaded = await io.exec("launchctl", ["bootstrap", guiDomain(), plistPath]);
   if (loaded.code !== 0) {
     io.err(`launchctl bootstrap failed (exit ${loaded.code}): ${loaded.output}`);
+    return 1;
+  }
+  // Loaded is not running: a crash loop or a Keychain refusal still loads cleanly.
+  if (!(await runningSoon(io, label))) {
+    io.err(`The daemon is loaded but not running. Check ${join(io.deps.dir, "daemon.log")}, then run mailbox daemon stop.`);
     return 1;
   }
   if (found === null) io.err(`warning: "${responder}" is not on your PATH; the daemon will defer every ask until it is`);

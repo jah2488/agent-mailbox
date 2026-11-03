@@ -24,6 +24,7 @@ function ioFor(
   person: Person,
   env: NodeJS.ProcessEnv = {},
   exitCodes: Readonly<Record<string, number>> = {},
+  launchdState = "running",
 ): CliIo & { readonly lines: string[]; readonly errors: string[]; readonly calls: string[][]; readonly launchAgents: string } {
   const lines: string[] = [];
   const errors: string[] = [];
@@ -39,7 +40,9 @@ function ioFor(
     claudeSettings: join(person.deps.dir, "claude-settings.json"),
     exec: async (program, args) => {
       calls.push([program, ...args]);
-      return { code: exitCodes[program] ?? 0, output: "" };
+      // What launchd reports for a loaded job; real output has many more lines.
+      const output = program === "launchctl" && args[0] === "print" ? `\tstate = ${launchdState}\n` : "";
+      return { code: exitCodes[program] ?? 0, output };
     },
     attach: async (program, args) => {
       calls.push([`attached: ${program}`, ...args]);
@@ -134,7 +137,7 @@ test("daemon start loads a launchd agent, and daemon stop unloads it and deletes
   assert.match(plist, new RegExp(`<string>${label}</string>`));
   assert.match(plist, /<string>daemon<\/string>\s*<string>run<\/string>/);
   assert.match(plist, /<key>MAILBOX_KEYSTORE<\/key>\s*<string>file<\/string>/);
-  assert.deepEqual(io.calls.at(-1), ["launchctl", "bootstrap", `gui/${process.getuid!()}`, plistPath]);
+  assert.ok(io.calls.some((c) => c.join(" ") === ["launchctl", "bootstrap", `gui/${process.getuid!()}`, plistPath].join(" ")));
   assert.match(io.lines.join("\n"), /mailbox daemon stop/);
 
   assert.equal(await run(["daemon", "stop"], io), 0, io.errors.join("\n"));
@@ -394,4 +397,15 @@ test("the status panel marks contacts still waiting", async () => {
   const io = ioFor(bob);
   await run(["status"], io);
   assert.match(io.lines.join("\n"), /Contacts\s+Alice \(waiting\), Mallory \(waiting\)|Contacts\s+.*Mallory \(waiting\)/);
+});
+
+test("daemon start says so when launchd loaded the daemon but it isn't running", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob, {}, {}, "waiting");
+  await run(["daemon", "setup"], io);
+  io.lines.length = 0;
+  assert.equal(await run(["daemon", "start"], io), 1);
+  assert.match(io.errors.join("\n"), /loaded but not running/);
+  assert.match(io.errors.join("\n"), /daemon\.log/);
+  assert.ok(!io.lines.some((l) => /Daemon on/.test(l)));
 });
