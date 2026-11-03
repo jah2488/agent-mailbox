@@ -43,8 +43,9 @@ const USAGE = [
   "  setup [--relay <url>] [--name <name>] first-run wizard: identity, daemon key, and how to share",
   "  keygen --name <name> --relay <url>   create your identity (key goes to the Keychain)",
   "  status                               who you are, what to share, and what's running",
-  "  whoami                               print your roster entry and fingerprint to share",
-  '  peer add <entry> --fingerprint "…"   trust someone, after they read you their fingerprint',
+  "  whoami                               your name, relay and fingerprint",
+  "  invite [--print]                     copy the command a teammate runs to add you",
+  "  peer add <invite>                    add a teammate from their invite",
   "  peers                                list contacts with fingerprints",
   "  sync                                 fetch new mail now",
   "  roots                                print the relay allowlist for you and your contacts",
@@ -159,9 +160,8 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
   io.out("");
   io.out(s.accent("Next: introduce yourself to each teammate"));
   io.out(`  1. Run ${s.cmd("mailbox invite")}. It copies the command your teammates run to add you; paste it to them.`);
-  io.out(`  2. On a call or in person, ${s.bold("read each other your fingerprints")} (yours is above).`);
-  io.out(`  3. Run each teammate's invite command. It shows their fingerprint and asks you to confirm it.`);
-  io.out(`  4. Optional: put a note on what you're working on in ${s.bold(join(shareDir(io.deps.dir), "status"))},`);
+  io.out(`  2. Run each teammate's invite command. That's all it takes to add them.`);
+  io.out(`  3. Optional: put a note on what you're working on in ${s.bold(join(shareDir(io.deps.dir), "status"))},`);
   io.out(`     then run ${s.cmd("mailbox daemon start")} so your agent can answer teammates while you're busy.`);
   return 0;
 }
@@ -171,7 +171,7 @@ async function whoami(io: CliIo): Promise<number> {
   if (home === null) return 1;
   const s = styles(io.color);
   io.out(`You're ${s.bold(home.me.name)} on ${new URL(home.me.relay).host}.`);
-  io.out(`Your fingerprint is ${s.bold(fingerprintOf(home.me.signPub))}. Teammates check it when they add you.`);
+  io.out(`Your fingerprint is ${s.bold(fingerprintOf(home.me.signPub))}.`);
   io.out(`To invite a teammate: ${s.cmd("mailbox invite")}`);
   return 0;
 }
@@ -190,16 +190,13 @@ async function invite(args: readonly string[], io: CliIo): Promise<number> {
   io.out((await io.copy(command)) ? `${s.accent("Copied")} the command your teammates run to add you:` : "Send your teammates this command, which adds you:");
   io.out(`  ${s.cmd(command)}`);
   io.out(`Paste it to them in Slack or anywhere. ${s.dim("It holds no secrets.")}`);
-  io.out(`Then, on a call or in person, read them your fingerprint: ${s.bold(fingerprintOf(home.me.signPub))}`);
-  io.out(s.dim("They're asked to confirm it when they run the command, so a tampered invite is caught."));
   return 0;
 }
 
 /**
- * Trust needs two things from the other person: their invite (which can
- * travel over Slack) and their fingerprint, heard from them directly. The
- * invite alone is never enough: whoever pastes it confirms the fingerprint
- * at a prompt, and with no terminal to ask in, nothing is added.
+ * Pasting a teammate's invite is all it takes to add them. Their fingerprint
+ * is shown here and kept in `mailbox peers`, so anyone who wants to check it
+ * against what the teammate says can do so later.
  */
 async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
   const token = args[0];
@@ -213,25 +210,15 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
     return 1;
   }
   const them = read.contact;
-  const s = styles(io.color);
-  io.out(`Adding ${s.bold(them.name)} on ${new URL(them.relay).host}.`);
-  io.out(`Their fingerprint: ${s.bold(fingerprintOf(them.signPub))}`);
-  const answer = await io.ask(`${s.accent(`Did ${them.name} read you this fingerprint, on a call or in person?`)} [y/N] `);
-  if (answer === null) {
-    io.err(`Nothing added: checking ${them.name}'s fingerprint needs you, so run it yourself in a terminal.`);
-    return 2;
-  }
-  if (!/^y(es)?$/i.test(answer.trim())) {
-    io.err(`Nothing added. Ask ${them.name} to read you their fingerprint, then run the command again.`);
-    return 1;
-  }
   try {
     await addContact(io.deps.dir, them);
   } catch (error) {
     io.err((error as Error).message);
     return 1;
   }
-  io.out(`${s.accent("Added")} ${them.name}. Your agents can now exchange mail.`);
+  const s = styles(io.color);
+  io.out(`${s.accent("Added")} ${s.bold(them.name)} on ${new URL(them.relay).host}. Your agents can now exchange mail.`);
+  io.out(s.dim(`Their fingerprint is ${fingerprintOf(them.signPub)}.`));
   return 0;
 }
 

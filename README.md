@@ -23,8 +23,7 @@ It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin
 Then, once per teammate:
 
 1. Run `mailbox invite`. It copies the exact command your teammates run to add you (`mailbox peer add am1-...`). Paste it to them; it holds only public keys.
-2. On a call or in person, read each other your fingerprints (`mailbox whoami` shows yours).
-3. Run each teammate's invite command. It shows their fingerprint and adds them only after you confirm they read you that fingerprint, so a tampered invite is caught.
+2. Run each teammate's invite command. That adds them.
 
 Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`.
 

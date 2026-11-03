@@ -81,7 +81,7 @@ async function adasInvite(): Promise<{ readonly command: string; readonly finger
 /** Runs a pasted `mailbox ...` command line the way a shell would hand it over. */
 const runPasted = (command: string, io: CliIo) => run(command.replace(/^mailbox /, "").split(" "), io);
 
-test("invite copies the exact command a teammate runs, and says to read the fingerprint on a call", async () => {
+test("invite copies the exact command a teammate runs to add you", async () => {
   const ada = await freshIo();
   await run(["keygen", "--name", "Ada", "--relay", "https://relay.example"], ada);
   ada.lines.length = 0;
@@ -89,40 +89,29 @@ test("invite copies the exact command a teammate runs, and says to read the fing
   assert.match(ada.copied.at(-1) ?? "", /^mailbox peer add am1-[A-Za-z0-9_-]+$/);
   const text = ada.lines.join("\n");
   assert.match(text, /Copied/);
-  assert.match(text, new RegExp(`read them your fingerprint.*${fingerprintOf((await readHome(ada.deps.dir)).me.signPub)}`, "s"));
+  assert.doesNotMatch(text, /read them|on a call/);
 });
 
-test("pasting an invite shows the fingerprint and adds the person only once you confirm it was read to you", async () => {
+test("pasting an invite adds the person straight away, with no question, and shows their fingerprint for later checks", async () => {
   const ada = await adasInvite();
-  const justin = await freshIo(["y"]);
+  const justin = await freshIo();
   await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
   justin.lines.length = 0;
 
   assert.equal(await runPasted(ada.command, justin), 0, justin.errors.join("\n"));
-  assert.match(justin.lines.join("\n"), new RegExp(ada.fingerprint));
-  assert.match(justin.asked[0]!, /Did Ada read you this fingerprint/);
+  assert.deepEqual(justin.asked, []);
   assert.match(justin.lines.join("\n"), /Added Ada/);
+  assert.match(justin.lines.join("\n"), new RegExp(ada.fingerprint));
   assert.equal((await readHome(justin.deps.dir)).contacts.size, 2);
 });
 
-test("anything but yes adds nothing", async () => {
-  const ada = await adasInvite();
-  for (const answer of ["n", "", "maybe"]) {
-    const justin = await freshIo([answer]);
-    await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
-    assert.equal(await runPasted(ada.command, justin), 1);
-    assert.match(justin.lines.join("\n") + justin.errors.join("\n"), /Nothing added/);
-    assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
-  }
-});
-
-test("with no terminal to confirm in, as when an agent runs it, an invite is refused", async () => {
+test("pasting the same invite twice keeps one contact", async () => {
   const ada = await adasInvite();
   const justin = await freshIo();
   await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
-  assert.equal(await runPasted(ada.command, justin), 2);
-  assert.match(justin.errors.join("\n"), /run it yourself in a terminal/);
-  assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
+  await runPasted(ada.command, justin);
+  assert.equal(await runPasted(ada.command, justin), 0);
+  assert.equal((await readHome(justin.deps.dir)).contacts.size, 2);
 });
 
 test("an invite whose key doesn't match its pid, or that isn't an invite at all, is refused before any question", async () => {
@@ -130,13 +119,13 @@ test("an invite whose key doesn't match its pid, or that isn't an invite at all,
   const token = ada.command.split(" ").at(-1)!;
   const entry = JSON.parse(Buffer.from(token.slice("am1-".length), "base64url").toString()) as Record<string, unknown>;
   const forged = "am1-" + Buffer.from(JSON.stringify({ ...entry, pid: "aaaaaaaaaaaaaaaa" })).toString("base64url");
-  const justin = await freshIo(["y"]);
+  const justin = await freshIo();
   await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
   assert.equal(await run(["peer", "add", forged], justin), 1);
   assert.match(justin.errors.join("\n"), /pid does not match/);
   assert.equal(await run(["peer", "add", "hello"], justin), 1);
   assert.match(justin.errors.join("\n"), /not an invite/);
-  assert.deepEqual(justin.asked, []);
+  assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
 });
 
 test("roots prints an allowlist the relay accepts, covering me and my contacts", async () => {
