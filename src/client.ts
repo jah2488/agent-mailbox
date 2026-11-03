@@ -228,7 +228,7 @@ async function syncUnlocked(deps: ClientDeps, home: Home, acting: Acting): Promi
       try {
         const res = await signedGet(deps, relay, `/log/${from}/${seq}`, acting.signer);
         if (res.status !== 200) throw new Error(await describeFailure(res));
-        const opened = open(new Uint8Array(await res.arrayBuffer()), { me: acting.box, roster: home.contacts, chains: chainsOf(state), now: deps.now() });
+        const opened = open(new Uint8Array(await res.arrayBuffer()), { me: acting.box, roster: home.contacts, chains: chainsOf(state) });
         if (opened.ok) {
           state = recordReceived(state, opened, deps.now().toISOString());
           received++;

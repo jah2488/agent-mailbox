@@ -1,5 +1,5 @@
 import { canonicalize } from "./canonical.ts";
-import { verifyCert, type SignedCert } from "./cert.ts";
+import { isCertShape, verifyCert, type SignedCert } from "./cert.ts";
 import type { Peer, Pid } from "./identity.ts";
 import sodium from "./sodium.ts";
 
@@ -69,6 +69,7 @@ export function verifyRequest(
   if (typeof claim !== "object" || claim === null) return rejected;
   const { h, m, n, p, pid, t, s, c } = claim as Record<string, unknown>;
   if (![h, m, n, p, pid, t, s].every((field) => typeof field === "string")) return rejected;
+  if (c !== undefined && !isCertShape(c)) return rejected;
   const signed = { h, m, n, p, pid, t, ...(c === undefined ? {} : { c }) } as Signed;
 
   const root = roots.get(signed.pid as Pid);

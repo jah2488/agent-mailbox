@@ -312,3 +312,36 @@ test("unknown routes and methods are 404 and 405", async () => {
   assert.equal((await send(new Request(`${BASE}/nope`))).status, 404);
   assert.equal((await send(new Request(`${BASE}/inbox/${bob.pid}`, { method: "DELETE" }))).status, 405);
 });
+
+test("an authorization claim with a malformed cert is 401, not a crash", async () => {
+  const path = `/inbox/${bob.pid}`;
+  const auth = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, { pid: bob.pid, signSec: bob.signSec, cert: { junk: true } as never });
+  assert.equal((await relay()(new Request(`${BASE}${path}`, { headers: { authorization: auth } }))).status, 401);
+});
+
+function agentEnvelope(sentAt: Date, certIssued: Date): Uint8Array<ArrayBuffer> {
+  const daemonKey = generateIdentity();
+  const cert = issueCert(alice, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: certIssued });
+  const sealed = seal({ from: alice, to: toPeer(bob), seq: 0, prev: null, ts: sentAt.toISOString(), body, agent: { signSec: daemonKey.signSec, cert } });
+  assert.ok(sealed.ok);
+  return sealed.wire;
+}
+
+test("agent mail stays readable after its cert expires: the cert is judged at send time", async () => {
+  const store = memoryStore();
+  assert.equal((await relay(store, NOW)(put(alice, 0, agentEnvelope(NOW, NOW)))).status, 201);
+  const later = new Date(NOW.getTime() + 40 * 86_400_000);
+  const fetched = await relay(store, later)(signedGet(`/log/${alice.pid}/0`, bob, later));
+  assert.equal(fetched.status, 200);
+});
+
+test("an expired agent key cannot backdate an envelope into its cert's window", async () => {
+  const expiredAt = new Date(NOW.getTime() - 40 * 86_400_000);
+  const backdated = agentEnvelope(new Date(expiredAt.getTime() + 60_000), expiredAt);
+  assert.equal((await relay()(put(alice, 0, backdated))).status, 401);
+});
+
+test("a current cert does not cover an envelope dated before the cert was issued", async () => {
+  const before = new Date(NOW.getTime() - 86_400_000);
+  assert.equal((await relay()(put(alice, 0, agentEnvelope(before, NOW)))).status, 401);
+});

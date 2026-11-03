@@ -75,3 +75,13 @@ export function certifiedKeyOf(cert: SignedCert): Uint8Array | null {
     return null;
   }
 }
+
+/** Structural check before any field is read; verifyCert assumes this shape. */
+export function isCertShape(value: unknown): value is SignedCert {
+  const record = (v: unknown): v is Readonly<Record<string, unknown>> => typeof v === "object" && v !== null && !Array.isArray(v);
+  const exactly = (r: Readonly<Record<string, unknown>>, keys: readonly string[]) => Object.keys(r).length === keys.length && keys.every((k) => Object.hasOwn(r, k));
+  if (!record(value) || !exactly(value, ["c", "s"]) || typeof value["s"] !== "string") return false;
+  const c = value["c"];
+  const fields = ["person", "agent_sign_pub", "name", "device", "issued", "expires"];
+  return record(c) && exactly(c, ["v", ...fields]) && c["v"] === 1 && fields.every((k) => typeof c[k] === "string");
+}

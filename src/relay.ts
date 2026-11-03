@@ -144,7 +144,7 @@ async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps:
   const notFound = () => refuse(404, "not_found");
   const wire = await deps.store.get(logKey(from, seq));
   if (wire === null) return notFound();
-  const outer = verifyOuter(wire, deps.roots, deps.now());
+  const outer = verifyOuter(wire, deps.roots);
   if (!outer.ok) return outer.error === "unknown_sender" ? notFound() : refuse(500, "stored_envelope_invalid");
   if (caller !== outer.header.from && caller !== outer.header.to) return notFound();
   return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });

@@ -1,5 +1,5 @@
 import { canonicalize, type Json } from "./canonical.ts";
-import { verifyCert, type SignedCert } from "./cert.ts";
+import { isCertShape, verifyCert, type SignedCert } from "./cert.ts";
 import type { BoxKeys, Identity, Peer, Pid } from "./identity.ts";
 import sodium from "./sodium.ts";
 
@@ -53,8 +53,6 @@ export type OpenContext = {
   readonly me: BoxKeys;
   readonly roster: ReadonlyMap<Pid, Peer>;
   readonly chains: ReadonlyMap<Pid, SenderChain>;
-  /** For cert expiry. Defaults to the current time. */
-  readonly now?: Date;
 };
 
 export type OpenError =
@@ -160,7 +158,7 @@ export type VerifiedOuter = { readonly ok: true; readonly header: Header; readon
  * shape, roster membership, cert chain and signature. The relay stops here;
  * open goes on. Checks run cheapest and least trusting first.
  */
-export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>, now: Date = new Date()): VerifiedOuter | Failure<OuterError> {
+export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>, acceptAt?: Date): VerifiedOuter | Failure<OuterError> {
   if (wire.length > MAX_ENVELOPE_BYTES) return fail("too_large");
 
   const parsed = parseCanonical(wire);
@@ -175,8 +173,12 @@ export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>, no
   let signer = sender.signPub;
   let via: Via = { kind: "owner" };
   if (header.cert !== undefined) {
-    const cert = verifyCert(header.cert, sender, now);
+    // A cert must cover the moment the envelope says it was sent, so mail
+    // stays readable after the cert lapses. Accepting new mail (acceptAt)
+    // also requires it be valid now, so an expired key can't backdate.
+    const cert = verifyCert(header.cert, sender, new Date(header.ts));
     if (!cert.ok) return fail("bad_cert");
+    if (acceptAt !== undefined && !verifyCert(header.cert, sender, acceptAt).ok) return fail("bad_cert");
     signer = cert.agentSignPub;
     via = { kind: "agent", name: cert.name };
   }
@@ -186,7 +188,7 @@ export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>, no
 
 /** Verifies and decrypts one envelope addressed to ctx.me. */
 export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenError> {
-  const outer = verifyOuter(wire, ctx.roster, ctx.now);
+  const outer = verifyOuter(wire, ctx.roster);
   if (!outer.ok) return outer;
   const { header, ciphertext, hash, via } = outer;
   if (header.to !== ctx.me.pid) return fail("wrong_recipient");
@@ -246,17 +248,6 @@ function readEnvelope(
     isHops(h["hops"]) &&
     (h["prev"] === null || (typeof h["prev"] === "string" && HASH_PATTERN.test(h["prev"])));
   return wellFormed ? { ok: true, header: h as unknown as Header, ciphertext: c, signature: s } : fail("malformed");
-}
-
-function isCertShape(value: unknown): value is SignedCert {
-  if (!isRecord(value) || !hasExactKeys(value, ["c", "s"]) || typeof value["s"] !== "string") return false;
-  const c = value["c"];
-  return (
-    isRecord(c) &&
-    hasExactKeys(c, ["v", "person", "agent_sign_pub", "name", "device", "issued", "expires"]) &&
-    c["v"] === 1 &&
-    ["person", "agent_sign_pub", "name", "device", "issued", "expires"].every((k) => typeof c[k] === "string")
-  );
 }
 
 function verifySignature(header: Header, ciphertext: string, signature: string, signerPub: Uint8Array): boolean {
