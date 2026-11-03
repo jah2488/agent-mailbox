@@ -1,4 +1,5 @@
 import { hashOf, type Body, type Hash, type Header, type Opened, type SenderChain, type Via } from "./envelope.ts";
+import { certHash } from "./cert.ts";
 import type { Pid } from "./identity.ts";
 
 // Pure state transitions for one person's mailbox. Everything here is plain
@@ -40,11 +41,13 @@ export type MailboxState = {
   readonly inbox: readonly Inbound[];
   /** Senders whose mail I refused (not in my roster), with the highest seq refused, so it isn't listed again. */
   readonly ignored: Readonly<Record<string, number>>;
+  /** Agent certs their person revoked, keyed "pid certHash", with the last seq that cert may still have signed. */
+  readonly revoked: Readonly<Record<string, number>>;
 };
 
 export type Pattern = { readonly from?: Pid; readonly tag?: string; readonly reply_to?: string };
 
-export const emptyState: MailboxState = { chains: {}, outbox: [], inbox: [], ignored: {} };
+export const emptyState: MailboxState = { chains: {}, outbox: [], inbox: [], ignored: {}, revoked: {} };
 
 export function nextLink(state: MailboxState): { readonly seq: number; readonly prev: Hash | null } {
   const last = state.outbox.at(-1);
@@ -87,6 +90,27 @@ export function recordReceived(state: MailboxState, opened: Opened, receivedAt: 
 }
 
 /** Remembers that mail from `pid` up to `seq` was refused, so the relay stops listing it. Never moves backwards. */
+const REVOKE_HASH = /^b2:[0-9a-f]{64}$/;
+
+/**
+ * Takes in one opened envelope. Mail signed by a revoked cert past its
+ * cutoff is refused, but its chain link is kept, so the sender's later mail
+ * still connects. A :revoke counts only when the person's root signed it.
+ */
+export function admit(state: MailboxState, opened: Opened, receivedAt: string): { readonly state: MailboxState; readonly refused: boolean } {
+  const { header, body, via } = opened;
+  if (header.cert !== undefined) {
+    const cutoff = state.revoked[`${header.from} ${certHash(header.cert)}`];
+    if (cutoff !== undefined && header.seq > cutoff) return { state: { ...state, chains: { ...state.chains, [header.from]: opened.chain } }, refused: true };
+  }
+  const received = recordReceived(state, opened, receivedAt);
+  const revoke = body.payload as { cert_hash?: unknown; effective_seq?: unknown } | null;
+  if (body.tag !== "revoke" || via.kind !== "owner" || typeof revoke?.cert_hash !== "string" || !REVOKE_HASH.test(revoke.cert_hash) || !Number.isSafeInteger(revoke.effective_seq)) {
+    return { state: received, refused: false };
+  }
+  return { state: { ...received, revoked: { ...received.revoked, [`${header.from} ${revoke.cert_hash}`]: revoke.effective_seq as number } }, refused: false };
+}
+
 export function ignoreThrough(state: MailboxState, pid: Pid, seq: number): MailboxState {
   const current = state.ignored[pid] ?? -1;
   return seq <= current ? state : { ...state, ignored: { ...state.ignored, [pid]: seq } };

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { checkInbox, receive, send, sync } from "./client.ts";
+import { checkInbox, receive, revokeAgent, send, sync } from "./client.ts";
 import { readHome } from "./home.ts";
 import { take, thread } from "./mailbox.ts";
 import { issueCert } from "./cert.ts";
@@ -199,4 +199,29 @@ test("a daemon whose key store holds another person's box keys is refused", asyn
   await alices.keys.save(agent);
   const cert = issueCert(bob.id, { agentSignPub: agent.signPub, name: "daemon", device: "test", now: new Date() });
   await assert.rejects(sync({ ...bob.deps, keys: alices.keys, agentCert: cert }), /box keys for someone other than Bob/);
+});
+
+test("after a root-signed revoke, mail from that agent cert is refused while the person's own mail still flows", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonOf(bob);
+  await send(daemon, { to: "Alice", tag: "reply", text: "before" });
+  await revokeAgent(bob.deps, daemon.agentCert);
+  await send(daemon, { to: "Alice", tag: "reply", text: "after, from a leaked key" });
+  await send(bob.deps, { to: "Alice", tag: "status", text: "still me" });
+
+  const synced = await sync(alice.deps);
+  const inbox = (await readHome(alice.deps.dir)).state.inbox.map((m) => [m.body.tag, m.body.prose ?? null]);
+  assert.deepEqual(inbox, [["reply", "before"], ["revoke", 'Bob revoked their agent "daemon".'], ["status", "still me"]]);
+  assert.deepEqual(synced.errors, ["Bob: refused mail from revoked agent \"daemon\" at seq 2"]);
+});
+
+test("a revoke only counts when the person's root signed it, never an agent", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonOf(bob);
+  const other = await daemonOf(bob, "laptop");
+  await revokeAgent(other, daemon.agentCert);
+  await send(daemon, { to: "Alice", tag: "reply", text: "still trusted" });
+
+  await sync(alice.deps);
+  assert.ok((await readHome(alice.deps.dir)).state.inbox.some((m) => m.body.prose === "still trusted"));
 });

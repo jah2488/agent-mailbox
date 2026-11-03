@@ -1,11 +1,11 @@
-import { access, constants, readFile, writeFile } from "node:fs/promises";
+import { access, constants, readFile, rename, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./audit.ts";
-import { certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
+import { certHash, certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
 import type { CliIo } from "./cli.ts";
-import type { ClientDeps } from "./client.ts";
+import { revokeAgent, type ClientDeps } from "./client.ts";
 import { acquireDaemonLock, initDaemonFiles, loadPolicy, readCert, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
@@ -282,6 +282,45 @@ async function review(io: CliIo): Promise<number> {
   return 0;
 }
 
+/**
+ * Revokes the current agent: every contact is told (as the root) to refuse
+ * anything its cert signs from here on, its keys are deleted, and its cert and
+ * audit log are archived side by side so the old log stays verifiable.
+ */
+async function revoke(io: CliIo): Promise<number> {
+  const home = await homeOf(io);
+  if (home === null) return 1;
+  const root = await rootOf(io, home);
+  if (root === null) return 1;
+  const cert = await readCert(io.deps.dir);
+  const trusted = cert === null ? null : verifyCert(cert, home.me, new Date(cert.c.issued));
+  if (cert === null || trusted === null || !trusted.ok) {
+    io.err("no agent of yours to revoke in agent.json");
+    return 1;
+  }
+  const release = await acquireDaemonLock(io.deps.dir);
+  if (release === null) {
+    io.err("stop the daemon first (launchctl bootout, or Ctrl-C), then revoke");
+    return 1;
+  }
+  try {
+    const sent = await revokeAgent(io.deps, cert);
+    const audit = trusted.auditPub === null ? null : await io.agentKeys.load(pidOf(trusted.auditPub));
+    if (audit !== null) await appendAudit(io.deps.dir, audit.signSec, { kind: "revoked", data: { cert: certHash(cert), told: sent.map((s) => s.toName) } });
+    for (const pub of [trusted.agentSignPub, trusted.auditPub]) if (pub !== null) await io.agentKeys.remove(pidOf(pub));
+    const stamp = io.deps.now().toISOString().replace(/[:.]/g, "-");
+    await rename(join(io.deps.dir, "agent.json"), join(io.deps.dir, `agent.revoked-${stamp}.json`));
+    await rename(join(io.deps.dir, AUDIT_FILE), join(io.deps.dir, `audit.revoked-${stamp}.jsonl`)).catch(() => undefined);
+    const queued = sent.filter((s) => !s.delivered).map((s) => s.toName);
+    io.out(`Revoked agent "${cert.c.name}". Told ${sent.length} contact${sent.length === 1 ? "" : "s"}${queued.length > 0 ? ` (queued for ${queued.join(", ")}; delivered on the next sync)` : ""}.`);
+    io.out(`If it was installed: launchctl bootout gui/$(id -u)/com.agent-mailbox.daemon.${home.me.pid}`);
+    io.out("For a new agent: mailbox daemon setup");
+    return 0;
+  } finally {
+    await release();
+  }
+}
+
 export async function daemonCommand(args: readonly string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = args;
   switch (sub) {
@@ -293,8 +332,10 @@ export async function daemonCommand(args: readonly string[], io: CliIo): Promise
       return runOnce(io, true);
     case "install":
       return install(io);
+    case "revoke":
+      return revoke(io);
   }
-  io.err("usage: mailbox daemon setup [--name <agent>] | once | run | install");
+  io.err("usage: mailbox daemon setup [--name <agent>] | once | run | install | revoke");
   return 2;
 }
 

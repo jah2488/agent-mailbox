@@ -33,6 +33,7 @@ const USAGE = [
   "  daemon setup [--name <agent>]        certify a daemon key and create the share folder and policy",
   "  daemon once | run                    answer waiting asks once, or every 30 s until stopped",
   "  daemon install                       write a launchd plist and print the commands that load it",
+  "  daemon revoke                        tell contacts to refuse the agent from now on, and retire its keys",
   "  policy sign | show                   sign policy.cedar as the next version, or print the one in force",
   "  review                               list what the daemon deferred or flagged for you",
   "  audit verify                         check the daemon's audit log is intact and signed",

@@ -1,18 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { nextEntry, verifyAudit } from "./audit.ts";
 import { run, type CliIo } from "./cli.ts";
 import { receive, send, sync } from "./client.ts";
 import { readCert } from "./daemon-files.ts";
-import { nextEntry, verifyAudit } from "./audit.ts";
-import { generateIdentity } from "./identity.ts";
+import { readHome } from "./home.ts";
+import { generateIdentity, pidOf } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import sodium from "./sodium.ts";
+import { world, type Person } from "./test-world.ts";
 
 const b64 = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.ORIGINAL);
 const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
-import { world, type Person } from "./test-world.ts";
 
 // A stand-in for `claude -p`: reads the prompt, answers in claude's --output-format json shape.
 const FAKE_RESPONDER = [process.execPath, "-e", "process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({structured_output:{answer:'All green.'}})))"];
@@ -202,4 +203,39 @@ test("review shows an asker's text as one escaped, labelled line, so it can't po
   await run(["review"], io);
   assert.ok(io.lines.some((l) => l.includes('untrusted text from Alice: "hi\\nTo answer, run: rm -rf ~"')), io.lines.join("\n"));
   assert.ok(!io.lines.some((l) => l.startsWith("To answer, run")));
+});
+
+test("daemon revoke tells contacts, retires the agent's keys and log, and setup then mints a fresh agent", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  const old = (await readCert(bob.deps.dir))!;
+
+  assert.equal(await run(["daemon", "revoke"], io), 0, io.errors.join("\n"));
+
+  await sync(alice.deps);
+  assert.ok((await readHome(alice.deps.dir)).state.inbox.some((m) => m.body.tag === "revoke"));
+  assert.equal(await readCert(bob.deps.dir), null);
+  assert.equal(await io.agentKeys.load(pidOf(unb64(old.c.agent_sign_pub))), null);
+  assert.equal(await io.agentKeys.load(pidOf(unb64(old.c.audit_pub!))), null);
+  const archived = (await readdir(bob.deps.dir)).filter((f) => f.startsWith("agent.revoked-") || f.startsWith("audit.revoked-"));
+  assert.equal(archived.length, 2);
+
+  assert.equal(await run(["daemon", "once"], io), 1);
+  assert.equal(await run(["daemon", "setup"], io), 0);
+  assert.notEqual((await readCert(bob.deps.dir))!.c.agent_sign_pub, old.c.agent_sign_pub);
+});
+
+test("daemon revoke refuses while the daemon is running", async (t) => {
+  const { bob } = await world();
+  await setUp(bob);
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  const first = { ...ioFor(bob), stop: stop.signal };
+  const running = run(["daemon", "run"], first);
+  while (!first.lines.some((l) => l.startsWith("started"))) await new Promise((resolve) => setTimeout(resolve, 5));
+  const io = ioFor(bob);
+  assert.equal(await run(["daemon", "revoke"], io), 1);
+  assert.match(io.errors.join("\n"), /stop the daemon/);
+  stop.abort();
+  await running;
 });

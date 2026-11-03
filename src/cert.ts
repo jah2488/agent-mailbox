@@ -89,3 +89,6 @@ export function isCertShape(value: unknown): value is SignedCert {
   const keys = c !== null && typeof c === "object" && Object.hasOwn(c, "audit_pub") ? ["v", ...fields, "audit_pub"] : ["v", ...fields];
   return record(c) && exactly(c, keys) && c["v"] === 1 && keys.slice(1).every((k) => typeof c[k] === "string");
 }
+
+/** Names one cert in a :revoke. Covers the root's signature too, so it names exactly the cert that was issued. */
+export const certHash = (cert: SignedCert): string => "b2:" + sodium.to_hex(sodium.crypto_generichash(32, new TextEncoder().encode(canonicalize(cert))));

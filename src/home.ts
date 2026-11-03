@@ -58,7 +58,8 @@ export async function readHome(dir: string): Promise<Home> {
   if (me === undefined) throw new Error("me.json is empty");
   // Validating me together with the peers catches a peer who shares my name.
   const contacts = contactsOrThrow(JSON.stringify([JSON.parse(meEntry), ...(await readPeers(dir)).filter((e) => (e as { pid?: string }).pid !== me.pid)]), "roster.json");
-  const state = JSON.parse(await readFile(file(dir, "state.json"), "utf8")) as MailboxState;
+  // Defaults fill fields added after this home was created.
+  const state = { ...emptyState, ...(JSON.parse(await readFile(file(dir, "state.json"), "utf8")) as Partial<MailboxState>) };
   return { me, contacts, state };
 }
 

@@ -1,17 +1,17 @@
 import type { Json } from "./canonical.ts";
-import { verifyCert, type SignedCert } from "./cert.ts";
+import { certHash, verifyCert, type SignedCert } from "./cert.ts";
 import { open, seal, type Body } from "./envelope.ts";
 import { readHome, withLock, writeState, type Home } from "./home.ts";
 import { pidOf, type BoxKeys, type Pid } from "./identity.ts";
 import type { KeyStore } from "./keystore.ts";
 import {
+  admit,
   chainsOf,
   ignoreThrough,
   knownHeads,
   markDelivered,
   nextLink,
   pendingDelivery,
-  recordReceived,
   recordSealed,
   take,
   thread,
@@ -230,8 +230,10 @@ async function syncUnlocked(deps: ClientDeps, home: Home, acting: Acting): Promi
         if (res.status !== 200) throw new Error(await describeFailure(res));
         const opened = open(new Uint8Array(await res.arrayBuffer()), { me: acting.box, roster: home.contacts, chains: chainsOf(state) });
         if (opened.ok) {
-          state = recordReceived(state, opened, deps.now().toISOString());
-          received++;
+          const admitted = admit(state, opened, deps.now().toISOString());
+          state = admitted.state;
+          if (admitted.refused) errors.push(`${sender.name}: refused mail from revoked agent "${opened.via.kind === "agent" ? opened.via.name : "?"}" at seq ${seq}`);
+          else received++;
         } else if (opened.error !== "duplicate") {
           // A gap or fork from one sender stops that sender only.
           stopped.add(from);
@@ -293,4 +295,22 @@ export async function checkInbox(deps: ClientDeps): Promise<InboxCheck> {
   const known = (await listWaiting(deps, home, acting.signer, home.state)).flatMap((r) => r.entries).filter((e) => home.contacts.has(e.from as Pid));
   const names = [...new Set(known.map((e) => home.contacts.get(e.from as Pid)?.name ?? e.from))];
   return { waiting: known.length, unread: unreadCount(home.state), from: names };
+}
+
+/**
+ * Tells every contact that this agent cert is revoked, as the person's root
+ * (so deps must not be in daemon mode). Each contact refuses anything the
+ * cert signs after the first revoke's seq; mail it signed before still stands.
+ */
+export async function revokeAgent(deps: ClientDeps, cert: SignedCert): Promise<readonly SendResult[]> {
+  const home = await readHome(deps.dir);
+  const effective = nextLink(home.state).seq;
+  const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid);
+  const results: SendResult[] = [];
+  for (const contact of others) {
+    results.push(
+      await send(deps, { to: contact.pid, tag: "revoke", text: `${home.me.name} revoked their agent "${cert.c.name}".`, payload: { cert_hash: certHash(cert), effective_seq: effective } }),
+    );
+  }
+  return results;
 }
