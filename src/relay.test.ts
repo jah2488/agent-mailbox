@@ -16,11 +16,12 @@ const body: Body = { tag: "ask", ref: "01JREF", payload: { q: "status?" } };
 
 // The Store contract promises no order, so this fake returns listings in
 // reverse on purpose: any ordering the relay relies on must come from the core.
-function memoryStore(): Store & { readonly listed: string[] } {
+function memoryStore(): Store & { readonly listed: string[]; readonly keys: () => readonly string[] } {
   const data = new Map<string, Uint8Array<ArrayBuffer>>();
   const listed: string[] = [];
   return {
     listed,
+    keys: () => [...data.keys()],
     get: async (key) => data.get(key) ?? null,
     createOnly: async (key, value) => {
       if (data.has(key)) return false;
@@ -148,6 +149,16 @@ test("a replayed read request is refused", async () => {
   const path = `/inbox/${bob.pid}`;
   assert.equal((await send(signedGet(path, bob, NOW, "n1"))).status, 200);
   assert.equal((await send(signedGet(path, bob, NOW, "n1"))).status, 401);
+});
+
+// The sweep that relies on this shape doesn't exist yet; this pins the shape
+// it will need: nonces grouped under the minute of the signed timestamp.
+test("a spent nonce is stored under its signer and the minute it was signed", async () => {
+  const store = memoryStore();
+  await relay(store)(signedGet(`/inbox/${bob.pid}`, bob, new Date("2026-11-02T12:00:42Z"), "n1"));
+  const nonces = store.keys().filter((key) => key.startsWith("nonce/"));
+  assert.equal(nonces.length, 1);
+  assert.match(nonces[0]!, new RegExp(`^nonce/${bob.pid}/2026-11-02T12:00/[0-9a-f]{32}$`));
 });
 
 test("a signed request for one path cannot be reused on another", async () => {
