@@ -46,6 +46,12 @@ process.exitCode = await run(process.argv.slice(2), {
   stop: stop.signal,
   exec: (program, args) =>
     new Promise((done) => execFile(program, [...args], (error, stdout, stderr) => done({ code: error === null ? 0 : typeof error.code === "number" ? error.code : 1, output: `${stdout}${stderr}`.trim() }))),
+  attach: (program, args) =>
+    new Promise((done) => {
+      const child = spawn(program, [...args], { stdio: "inherit" });
+      child.on("error", () => done(127));
+      child.on("close", (code) => done(code ?? 1));
+    }),
   launchAgents: join(homedir(), "Library", "LaunchAgents"),
   claudeSettings: join(homedir(), ".claude", "settings.json"),
   ask,

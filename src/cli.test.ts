@@ -38,6 +38,7 @@ async function freshIo(answers: readonly string[] = []): Promise<CliIo & { reado
     env: {},
     stop: AbortSignal.abort(),
     exec: async () => ({ code: 0, output: "" }),
+    attach: async () => 0,
     color: false,
     launchAgents: join(dir, "LaunchAgents"),
     claudeSettings: join(dir, "claude-settings.json"),

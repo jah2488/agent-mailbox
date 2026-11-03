@@ -35,6 +35,8 @@ export type CliIo = {
   readonly ask: (question: string) => Promise<string | null>;
   /** Whether output goes to a terminal that wants color (a TTY, and NO_COLOR unset). */
   readonly color: boolean;
+  /** Runs a command on the user's own terminal (its output shows, and it can prompt). Returns the exit code. */
+  readonly attach: (program: string, args: readonly string[]) => Promise<number>;
   /** Puts text on the clipboard; false when there is no clipboard to use. */
   readonly copy: (text: string) => Promise<boolean>;
 };
@@ -336,9 +338,10 @@ async function update(io: CliIo): Promise<number> {
     io.err(`git pull failed in ${root}; nothing was changed:\n${pulled.output}`);
     return 1;
   }
-  const installed = await io.exec("env", [`AGENT_MAILBOX_DIR=${root}`, "bash", join(root, "install.sh")]);
-  if (installed.code !== 0) {
-    io.err(`the installer failed after pulling:\n${installed.output}`);
+  // Attached, so npm's progress shows and the wizard can ask if this home has no identity yet.
+  const installed = await io.attach("env", [`AGENT_MAILBOX_DIR=${root}`, "bash", join(root, "install.sh")]);
+  if (installed !== 0) {
+    io.err("the installer failed after pulling; its output is above");
     return 1;
   }
   const home = await readHome(io.deps.dir).catch(() => null);

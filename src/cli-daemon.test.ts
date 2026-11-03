@@ -41,6 +41,10 @@ function ioFor(
       calls.push([program, ...args]);
       return { code: exitCodes[program] ?? 0, output: "" };
     },
+    attach: async (program, args) => {
+      calls.push([`attached: ${program}`, ...args]);
+      return exitCodes[program] ?? 0;
+    },
     deps: person.deps,
     agentKeys: fileKeyStore(join(person.deps.dir, "agent-keys.json")),
     env,
@@ -308,7 +312,7 @@ test("update pulls, reruns the new installer against this checkout, and restarts
   assert.equal(await run(["update"], io), 0, io.errors.join("\n"));
   assert.deepEqual(io.calls.map((c) => c.join(" ")), [
     "git -C /opt/agent-mailbox pull --ff-only",
-    "env AGENT_MAILBOX_DIR=/opt/agent-mailbox bash /opt/agent-mailbox/install.sh",
+    "attached: env AGENT_MAILBOX_DIR=/opt/agent-mailbox bash /opt/agent-mailbox/install.sh",
     "/opt/agent-mailbox/bin/mailbox daemon start",
     "git -C /opt/agent-mailbox rev-parse --short HEAD",
   ]);
