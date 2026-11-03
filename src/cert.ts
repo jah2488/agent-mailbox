@@ -66,3 +66,12 @@ export function verifyCert(
     return { ok: false, error: "malformed cert key" };
   }
 }
+
+/** The agent key a cert names, signature unchecked: only for finding which stored key to renew. Trust comes from verifyCert. */
+export function certifiedKeyOf(cert: SignedCert): Uint8Array | null {
+  try {
+    return unb64(cert.c.agent_sign_pub);
+  } catch {
+    return null;
+  }
+}

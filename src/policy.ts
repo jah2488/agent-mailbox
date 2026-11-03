@@ -53,6 +53,9 @@ function parse(text: string): Parsed | null {
   return { policies, tiers };
 }
 
+/** For `policy sign`: refuse to sign text the daemon would treat as deny-everything. */
+export const policyParses = (text: string): boolean => parse(text) !== null;
+
 export function decide(
   text: string,
   request: { readonly principal: Pid; readonly path: string; readonly contacts: ReadonlySet<Pid> },

@@ -20,6 +20,9 @@ async function freshIo(): Promise<CliIo & { readonly lines: string[]; readonly e
     out: (line) => lines.push(line),
     err: (line) => errors.push(line),
     repoRoot: "/opt/agent-mailbox",
+    agentKeys: fileKeyStore(join(dir, "agent-keys.json")),
+    env: {},
+    stop: AbortSignal.abort(),
   };
 }
 

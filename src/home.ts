@@ -18,7 +18,7 @@ const LOCK_WAIT_MS = 10_000;
 
 const file = (dir: string, name: string) => join(dir, name);
 
-async function writeJson(path: string, value: unknown): Promise<void> {
+export async function writeJson(path: string, value: unknown): Promise<void> {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
   await rename(tmp, path);

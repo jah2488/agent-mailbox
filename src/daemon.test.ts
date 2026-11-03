@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AuditEvent } from "./audit.ts";
 import { receive, send } from "./client.ts";
-import { tick, type DaemonDeps } from "./daemon.ts";
+import { runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import type { ResponderResult } from "./responder.ts";
 import type { ShareFile } from "./share.ts";
@@ -121,4 +121,27 @@ test("asks received before the daemon started are left for the owner", async () 
 
   assert.deepEqual(daemon.prompts, []);
   assert.deepEqual(daemon.audit, []);
+});
+
+test("the loop outlives a failing tick and stops when aborted", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  let policyCalls = 0;
+  const flaky: DaemonDeps = {
+    ...daemon.deps,
+    policy: async () => {
+      policyCalls++;
+      if (policyCalls === 1) throw new Error("disk hiccup");
+      return { ok: true, cedar: DEFAULT_POLICY };
+    },
+  };
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  const stop = new AbortController();
+  const logged: string[] = [];
+  const running = runDaemon(flaky, { intervalMs: 1, signal: stop.signal, log: (line) => logged.push(line) });
+  while (daemon.audit.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  stop.abort();
+  await running;
+  assert.match(logged[0]!, /disk hiccup/);
+  assert.deepEqual(daemon.audit.map((e) => e.kind), ["answered"]);
 });

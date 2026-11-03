@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { AuditEvent } from "./audit.ts";
 import { send, sync, type ClientDeps } from "./client.ts";
 import { planAnswer, settleAnswer, unanswered, type Plan } from "./daemon-core.ts";
@@ -65,4 +66,17 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
     }
   }
   return done;
+}
+
+/** Ticks every intervalMs until aborted. A failed tick is logged and the next one tries again. */
+export async function runDaemon(deps: DaemonDeps, options: { readonly intervalMs: number; readonly signal: AbortSignal; readonly log: (line: string) => void }): Promise<void> {
+  let handled: Handled = new Set();
+  while (!options.signal.aborted) {
+    try {
+      handled = await tick(deps, handled);
+    } catch (error) {
+      options.log(`tick failed: ${(error as Error).message}`);
+    }
+    await sleep(options.intervalMs, undefined, { signal: options.signal }).catch(() => undefined);
+  }
 }

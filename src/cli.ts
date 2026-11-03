@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { auditVerify, daemonCommand, policyCommand, review } from "./cli-daemon.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
+import type { KeyStore } from "./keystore.ts";
 import { contact, normaliseRelay, parseRoster, rosterEntry } from "./roster.ts";
 
 export type CliIo = {
@@ -11,6 +13,12 @@ export type CliIo = {
   readonly err: (line: string) => void;
   /** Absolute path of this checkout, for the commands `install` prints. */
   readonly repoRoot: string;
+  /** Where the daemon's agent key lives, apart from the root key in `deps.keys`. */
+  readonly agentKeys: KeyStore;
+  /** Carried into the launchd plist (PATH, MAILBOX_KEYSTORE). */
+  readonly env: NodeJS.ProcessEnv;
+  /** Ends `daemon run`. */
+  readonly stop: AbortSignal;
 };
 
 const USAGE = [
@@ -22,6 +30,12 @@ const USAGE = [
   "  sync                                 fetch new mail now",
   "  roots                                print the relay allowlist for you and your contacts",
   "  install                              print the Claude Code setup commands",
+  "  daemon setup [--name <agent>]        certify a daemon key and create the share folder and policy",
+  "  daemon once | run                    answer waiting asks once, or every 30 s until stopped",
+  "  daemon install                       write a launchd plist and print the commands that load it",
+  "  policy sign | show                   sign policy.cedar as the next version, or print the one in force",
+  "  review                               list what the daemon deferred or flagged for you",
+  "  audit verify                         check the daemon's audit log is intact and signed",
 ].join("\n");
 
 async function homeOrExplain(io: CliIo): Promise<Home | null> {
@@ -153,6 +167,15 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return roots(io);
     case "install":
       return install(io);
+    case "daemon":
+      return daemonCommand(rest, io);
+    case "policy":
+      return policyCommand(rest, io);
+    case "review":
+      return review(io);
+    case "audit":
+      if (rest[0] === "verify") return auditVerify(io);
+      break;
   }
   io.err(USAGE);
   return 2;
