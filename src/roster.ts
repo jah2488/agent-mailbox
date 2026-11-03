@@ -40,7 +40,7 @@ export function normaliseRelay(raw: unknown): string | null {
 // short length keep it from carrying punctuation-shaped instructions or frame markers.
 const NAME_PATTERN = new RegExp(`^[\\p{L}\\p{N} ._'-]{1,${MAX_NAME}}$`, "u");
 
-function readName(raw: unknown): string | null {
+export function normaliseName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const name = raw.trim();
   return NAME_PATTERN.test(name) ? name : null;
@@ -64,7 +64,7 @@ export function parseRoster(json: string): { readonly ok: true; readonly contact
     const fail = (why: string) => ({ ok: false as const, error: `roster ${index}: ${why}` });
     const peer = readRootEntry(entry);
     if (typeof peer === "string") return fail(peer);
-    const name = readName(entry?.name);
+    const name = normaliseName(entry?.name);
     if (name === null) return fail(`name must be 1-${MAX_NAME} letters, digits, spaces or . _ ' -`);
     if (contacts.some((c) => c.name.toLowerCase() === name.toLowerCase())) return fail(`name "${name}" is already used`);
     const relay = normaliseRelay(entry?.relay);

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # agent-mailbox installer. Safe to re-run: it updates in place.
 #
-#   curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --name "Your Name" --relay https://your-relay.example
+#   curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash
+#   curl -fsSL .../install.sh | bash -s -- --relay https://your-relay.example [--name "Your Name"]
 #
 # Installs the code into ~/.local/share/agent-mailbox, links `mailbox` into
 # ~/.local/bin, registers the MCP server and the inbox hook with Claude Code
-# (a backup of settings.json is kept beside it), and (with --name and
-# --relay) creates your identity and your daemon's certified key. It never
+# (a backup of settings.json is kept beside it), then runs `mailbox setup`,
+# which asks for your relay and your name (each skipped when passed as a
+# flag) and creates your identity and your daemon's certified key. It never
 # starts the daemon: that is `mailbox daemon start`, and `mailbox daemon stop`
 # turns it off. `mailbox uninstall` reverses all of this.
 set -euo pipefail
@@ -61,29 +63,26 @@ else
   echo "warning: claude not found; once it is installed, run: claude mcp add --scope user agent-mailbox -- node $dir/src/mcp-main.ts" >&2
 fi
 
-if [ -n "$name" ] && [ -n "$relay" ]; then
-  if "$mailbox" whoami > /dev/null 2>&1; then
-    say "You already have an identity; keeping it"
-  else
-    "$mailbox" keygen --name "$name" --relay "$relay" > /dev/null
-  fi
-  "$mailbox" daemon setup > /dev/null
-  say "Identity and daemon key ready"
+echo
+say "Set up your identity"
+setup_args=()
+[ -n "$relay" ] && setup_args+=(--relay "$relay")
+[ -n "$name" ] && setup_args+=(--name "$name")
+# Under curl | bash, stdin is this script, so the wizard reads the terminal directly.
+# The guarded expansion keeps macOS's bash 3.2 happy with an empty list under set -u.
+if (exec < /dev/tty) 2> /dev/null; then
+  "$mailbox" setup ${setup_args[@]+"${setup_args[@]}"} < /dev/tty
+else
+  "$mailbox" setup ${setup_args[@]+"${setup_args[@]}"}
 fi
 
 echo
 say "Installed."
 case ":$PATH:" in *":$bin_dir:"*) ;; *) echo "Add $bin_dir to your PATH to run mailbox by name." ;; esac
-if "$mailbox" whoami > /dev/null 2>&1; then
-  echo "Send this line to each teammate, and read them your fingerprint on a call:"
-  "$mailbox" whoami | sed 's/^/  /'
-else
-  echo "Create your identity: mailbox keygen --name \"Your Name\" --relay <relay url>, then mailbox daemon setup"
-fi
 cat <<'EOF'
-Add a teammate:     mailbox peer add '<their line>' --fingerprint "<what they read you>"
 Daemon on / off:    mailbox daemon start   /   mailbox daemon stop
 What needs you:     mailbox review
+Update:             mailbox update
 Remove everything:  mailbox uninstall
 Restart Claude Code to pick up the MCP server.
 EOF

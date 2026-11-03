@@ -9,13 +9,21 @@ import { fileKeyStore } from "./keystore.ts";
 import { parseRoots } from "./roots.ts";
 import { parseRoster } from "./roster.ts";
 
-async function freshIo(): Promise<CliIo & { readonly lines: string[]; readonly errors: string[] }> {
+/** answers are typed in order at each wizard question; when they run out, there's no terminal to ask. */
+async function freshIo(answers: readonly string[] = []): Promise<CliIo & { readonly lines: string[]; readonly errors: string[]; readonly asked: string[] }> {
   const dir = await mkdtemp(join(tmpdir(), "mailbox-cli-"));
   const lines: string[] = [];
   const errors: string[] = [];
+  const asked: string[] = [];
+  const queue = [...answers];
   return {
     lines,
     errors,
+    asked,
+    ask: async (question) => {
+      asked.push(question);
+      return queue.shift() ?? null;
+    },
     deps: { dir, keys: fileKeyStore(join(dir, "keys.json")), fetch: globalThis.fetch, now: () => new Date() },
     out: (line) => lines.push(line),
     err: (line) => errors.push(line),
@@ -155,4 +163,52 @@ test("hook remove with no settings file creates none", async () => {
   const io = await freshIo();
   assert.equal(await run(["hook", "remove"], io), 0);
   await assert.rejects(readFile(io.claudeSettings, "utf8"));
+});
+
+// ---- Setup wizard ----
+
+test("setup asks for the relay, then the name it will be known by there, re-asking until each is valid", async () => {
+  const io = await freshIo(["not a url", "https://relay.example", "", "Anil"]);
+  assert.equal(await run(["setup"], io), 0, io.errors.join("\n"));
+  assert.equal(io.asked.length, 4);
+  assert.match(io.asked[0]!, /relay/i);
+  assert.match(io.asked[2]!, /What name do you want to be identified as on relay\.example\?/);
+  const home = await readHome(io.deps.dir);
+  assert.deepEqual([home.me.name, home.me.relay], ["Anil", "https://relay.example"]);
+  assert.ok(await io.deps.keys.load(home.me.pid));
+  assert.ok(io.lines.some((l) => /mailbox whoami/.test(l)));
+  assert.ok(io.lines.some((l) => /fingerprint/i.test(l)));
+});
+
+test("setup skips the relay question when --relay is given, and both questions with --name too", async () => {
+  const one = await freshIo(["David"]);
+  assert.equal(await run(["setup", "--relay", "https://relay.example"], one), 0, one.errors.join("\n"));
+  assert.equal(one.asked.length, 1);
+  assert.match(one.asked[0]!, /name/);
+
+  const none = await freshIo();
+  assert.equal(await run(["setup", "--relay", "https://relay.example", "--name", "Sean"], none), 0, none.errors.join("\n"));
+  assert.deepEqual(none.asked, []);
+});
+
+test("setup with no terminal to ask and a missing answer says which flag to pass", async () => {
+  const io = await freshIo();
+  assert.equal(await run(["setup", "--relay", "https://relay.example"], io), 2);
+  assert.match(io.errors.join("\n"), /no terminal to ask your name; pass --name/);
+});
+
+test("setup refuses a bad --name or --relay rather than asking", async () => {
+  const io = await freshIo(["Anil"]);
+  assert.equal(await run(["setup", "--relay", "ftp://nope", "--name", "Anil"], io), 2);
+  assert.deepEqual(io.asked, []);
+  assert.match(io.errors.join("\n"), /--relay must be an https URL/);
+});
+
+test("setup on a machine that already has an identity keeps it and asks nothing", async () => {
+  const io = await freshIo();
+  await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], io);
+  assert.equal(await run(["setup"], io), 0, io.errors.join("\n"));
+  assert.deepEqual(io.asked, []);
+  assert.equal((await readHome(io.deps.dir)).me.name, "Justin");
+  assert.ok(io.lines.some((l) => /already set up as Justin/.test(l)));
 });

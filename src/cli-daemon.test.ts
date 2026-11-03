@@ -32,6 +32,7 @@ function ioFor(
     lines,
     errors,
     calls,
+    ask: async () => null,
     launchAgents: join(person.deps.dir, "LaunchAgents"),
     claudeSettings: join(person.deps.dir, "claude-settings.json"),
     exec: async (program, args) => {

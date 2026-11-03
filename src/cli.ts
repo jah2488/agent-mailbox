@@ -8,7 +8,7 @@ import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
 import type { KeyStore } from "./keystore.ts";
-import { contact, normaliseRelay, parseRoster, rosterEntry } from "./roster.ts";
+import { contact, normaliseName, normaliseRelay, parseRoster, rosterEntry } from "./roster.ts";
 
 export type CliIo = {
   readonly deps: ClientDeps;
@@ -28,10 +28,13 @@ export type CliIo = {
   readonly launchAgents: string;
   /** ~/.claude/settings.json, where hook install adds the inbox hook. */
   readonly claudeSettings: string;
+  /** Asks the person at the terminal; null when there is no terminal to ask. */
+  readonly ask: (question: string) => Promise<string | null>;
 };
 
 const USAGE = [
   "usage: mailbox <command>",
+  "  setup [--relay <url>] [--name <name>] first-run wizard: identity, daemon key, and how to share",
   "  keygen --name <name> --relay <url>   create your identity (key goes to the Keychain)",
   "  whoami                               print your roster entry and fingerprint to share",
   '  peer add <entry> --fingerprint "…"   trust someone, after they read you their fingerprint',
@@ -60,25 +63,97 @@ async function homeOrExplain(io: CliIo): Promise<Home | null> {
   }
 }
 
-async function keygen(args: readonly string[], io: CliIo): Promise<number> {
-  const { values } = parseArgs({ args: [...args], options: { name: { type: "string" }, relay: { type: "string" } } });
-  const relay = normaliseRelay(values.relay);
-  if (!values.name?.trim() || relay === null) {
-    io.err("keygen needs --name and an https --relay URL");
-    return 2;
-  }
+/** Creates the home and stores the key. Home first: it refuses an existing identity before a new key is stored. */
+async function createIdentity(io: CliIo, name: string, relay: string): Promise<Home | null> {
   const identity = generateIdentity();
-  const me = contact(toPeer(identity), values.name.trim(), relay);
+  const me = contact(toPeer(identity), name, relay);
   try {
-    // Home first: it refuses an existing identity before a new key is stored.
     await initHome(io.deps.dir, me);
   } catch (error) {
     io.err((error as Error).message);
-    return 1;
+    return null;
   }
   await io.deps.keys.save(identity);
-  io.out(`Created ${me.name} (${me.pid}) in ${io.deps.dir}`);
+  return readHome(io.deps.dir);
+}
+
+const NAME_RULE = "1-32 letters, digits, spaces, or . _ ' -";
+
+async function keygen(args: readonly string[], io: CliIo): Promise<number> {
+  const { values } = parseArgs({ args: [...args], options: { name: { type: "string" }, relay: { type: "string" } } });
+  const relay = normaliseRelay(values.relay);
+  const name = normaliseName(values.name);
+  if (name === null || relay === null) {
+    io.err(`keygen needs --name (${NAME_RULE}) and an https --relay URL`);
+    return 2;
+  }
+  const home = await createIdentity(io, name, relay);
+  if (home === null) return 1;
+  io.out(`Created ${home.me.name} (${home.me.pid}) in ${io.deps.dir}`);
   return whoami(io);
+}
+
+/** Asks until the answer passes check, or returns null when there is no terminal to ask. */
+async function askUntil(io: CliIo, question: string, check: (raw: string) => string | null, retry: string): Promise<string | null> {
+  for (;;) {
+    const answer = await io.ask(question);
+    if (answer === null) return null;
+    const valid = check(answer);
+    if (valid !== null) return valid;
+    io.err(retry);
+  }
+}
+
+/**
+ * The first-run wizard: the relay (unless --relay), then the name to be known
+ * by there (unless --name), then the identity and the daemon's key, then how
+ * to introduce yourself to teammates. An existing identity is kept.
+ */
+async function setup(args: readonly string[], io: CliIo): Promise<number> {
+  const { values } = parseArgs({ args: [...args], options: { name: { type: "string" }, relay: { type: "string" } } });
+  const existing = await readHome(io.deps.dir).catch(() => null);
+  if (existing !== null) {
+    io.out(`You're already set up as ${existing.me.name} on ${new URL(existing.me.relay).host}; keeping that identity.`);
+  } else {
+    const relay =
+      values.relay === undefined
+        ? await askUntil(io, "Relay URL (your team's agent-mailbox relay, https://...): ", normaliseRelay, "That isn't an https URL (http is allowed only for localhost). Try again.")
+        : normaliseRelay(values.relay);
+    if (values.relay !== undefined && relay === null) {
+      io.err("--relay must be an https URL (http only for localhost)");
+      return 2;
+    }
+    if (relay === null) {
+      io.err("no terminal to ask your relay; pass --relay <url>");
+      return 2;
+    }
+    const name =
+      values.name === undefined
+        ? await askUntil(io, `What name do you want to be identified as on ${new URL(relay).host}? `, normaliseName, `A name is ${NAME_RULE}. Try again.`)
+        : normaliseName(values.name);
+    if (values.name !== undefined && name === null) {
+      io.err(`--name must be ${NAME_RULE}`);
+      return 2;
+    }
+    if (name === null) {
+      io.err("no terminal to ask your name; pass --name <name>");
+      return 2;
+    }
+    const home = await createIdentity(io, name, relay);
+    if (home === null) return 1;
+    io.out(`You're ${home.me.name} on ${new URL(relay).host}. Your secret key is in the Keychain.`);
+  }
+  const daemon = await daemonCommand(["setup"], io);
+  if (daemon !== 0 || existing !== null) return daemon;
+  io.out("");
+  io.out("Next, introduce yourself to each teammate:");
+  io.out("  1. Run: mailbox whoami");
+  io.out("     It prints one line starting with { and a fingerprint.");
+  io.out("  2. Send that line to your teammates, in Slack or anywhere. It holds no secrets.");
+  io.out("  3. On a call, read each other your fingerprints. Then add each teammate with:");
+  io.out("     mailbox peer add '<their line>' --fingerprint \"<what they read you>\"");
+  io.out("     A line whose fingerprint doesn't match what you heard is refused.");
+  return 0;
 }
 
 async function whoami(io: CliIo): Promise<number> {
@@ -244,6 +319,8 @@ async function update(io: CliIo): Promise<number> {
 export async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case "setup":
+      return setup(rest, io);
     case "keygen":
       return keygen(rest, io);
     case "whoami":
