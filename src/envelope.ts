@@ -225,6 +225,12 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Compatibility rule: a signed object may carry fields this version doesn't
+// know (a newer sender's additions), so required fields are checked and the
+// rest ignored. Unsigned wrappers stay exact, since anyone could add to them.
+// A change old readers must not ignore bumps v instead.
+const hasKeys = (record: Readonly<Record<string, unknown>>, required: readonly string[]) => required.every((k) => Object.hasOwn(record, k));
+
 function hasExactKeys(record: Readonly<Record<string, unknown>>, required: readonly string[], optional: readonly string[] = []): boolean {
   const keys = Object.keys(record);
   return required.every((k) => Object.hasOwn(record, k)) && keys.every((k) => required.includes(k) || optional.includes(k));
@@ -236,7 +242,7 @@ function readEnvelope(
   if (!isRecord(value) || !hasExactKeys(value, ["c", "h", "s"])) return fail("malformed");
   const { c, h, s } = value;
   if (typeof c !== "string" || typeof s !== "string" || !isRecord(h)) return fail("malformed");
-  if (!hasExactKeys(h, ["v", "from", "to", "seq", "prev", "ts", "hops", "authored_by"], ["cert"])) return fail("malformed");
+  if (!hasKeys(h, ["v", "from", "to", "seq", "prev", "ts", "hops", "authored_by"])) return fail("malformed");
   if (h["cert"] !== undefined && !isCertShape(h["cert"])) return fail("malformed");
   // v0 has no root-signed approval, so a human claim cannot be verified yet.
   if (h["v"] !== 1 || h["authored_by"] !== "agent") return fail("unsupported");
@@ -283,13 +289,15 @@ function decryptBody(
   } catch {
     return fail("decrypt_failed");
   }
-  if (!isRecord(value) || !hasExactKeys(value, ["tag", "ref", "payload", "from"], ["reply_to", "prose"])) return fail("malformed");
-  const { from, ...body } = value;
+  if (!isRecord(value) || !hasKeys(value, ["tag", "ref", "payload", "from"])) return fail("malformed");
+  // Only known fields are kept, so nothing unvetted reaches state or the model.
+  const { from, tag, ref, payload, reply_to, prose } = value;
+  const body = { tag, ref, payload, ...(reply_to === undefined ? {} : { reply_to }), ...(prose === undefined ? {} : { prose }) };
   const wellFormed =
     typeof from === "string" &&
-    typeof body["tag"] === "string" &&
-    typeof body["ref"] === "string" &&
-    (body["reply_to"] === undefined || typeof body["reply_to"] === "string") &&
-    (body["prose"] === undefined || typeof body["prose"] === "string");
+    typeof tag === "string" &&
+    typeof ref === "string" &&
+    (reply_to === undefined || typeof reply_to === "string") &&
+    (prose === undefined || typeof prose === "string");
   return wellFormed ? { ok: true, body: body as unknown as Body, from: from as string } : fail("malformed");
 }

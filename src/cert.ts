@@ -8,7 +8,7 @@ import sodium from "./sodium.ts";
 // agent rather than the person. Short-lived, so a leaked agent key ages out.
 
 /** Domain separation from envelopes and requests: a cert signature verifies as nothing else. */
-const CERT_DOMAIN = "agent-mailbox/v1/cert\n";
+export const CERT_DOMAIN = "agent-mailbox/v1/cert\n";
 const DEFAULT_TTL_DAYS = 30;
 const SKEW_MS = 5 * 60_000;
 // Receivers print this outside the untrusted frame, so it is a slug, never prose.
@@ -86,8 +86,8 @@ export function isCertShape(value: unknown): value is SignedCert {
   if (!record(value) || !exactly(value, ["c", "s"]) || typeof value["s"] !== "string") return false;
   const c = value["c"];
   const fields = ["person", "agent_sign_pub", "name", "device", "issued", "expires"];
-  const keys = c !== null && typeof c === "object" && Object.hasOwn(c, "audit_pub") ? ["v", ...fields, "audit_pub"] : ["v", ...fields];
-  return record(c) && exactly(c, keys) && c["v"] === 1 && keys.slice(1).every((k) => typeof c[k] === "string");
+  // c is root-signed, so fields a newer issuer added are allowed; only the wrapper is exact.
+  return record(c) && c["v"] === 1 && fields.every((k) => typeof c[k] === "string") && (c["audit_pub"] === undefined || typeof c["audit_pub"] === "string");
 }
 
 /** Names one cert in a :revoke. Covers the root's signature too, so it names exactly the cert that was issued. */

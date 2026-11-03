@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { issueCert, verifyCert } from "./cert.ts";
+import { canonicalize } from "./canonical.ts";
+import { CERT_DOMAIN, isCertShape, issueCert, verifyCert } from "./cert.ts";
+import sodium from "./sodium.ts";
 import { generateIdentity, toPeer } from "./identity.ts";
 
 const justin = generateIdentity();
@@ -46,4 +48,13 @@ test("editing any cert field breaks its signature", () => {
   const cert = issueCert(justin, { agentSignPub: daemon.signPub, name: "daemon", device: "laptop", now });
   const stretched = { ...cert, c: { ...cert.c, expires: "2099-01-01T00:00:00.000Z" } };
   assert.deepEqual(verifyCert(stretched, toPeer(justin), now), { ok: false, error: "bad cert signature" });
+});
+
+test("a cert carrying a root-signed field this version doesn't know still verifies", () => {
+  const cert = issueCert(justin, { agentSignPub: daemon.signPub, name: "daemon", device: "laptop", now });
+  const c = { ...cert.c, future: "ignored" };
+  const s = sodium.to_base64(sodium.crypto_sign_detached(new TextEncoder().encode(CERT_DOMAIN + canonicalize(c as never)), justin.signSec), sodium.base64_variants.ORIGINAL);
+  assert.ok(isCertShape({ c, s }));
+  assert.ok(verifyCert({ c, s } as never, toPeer(justin), now).ok);
+  assert.equal(isCertShape({ ...cert, extra: 1 }), false, "the unsigned wrapper stays strict");
 });

@@ -254,3 +254,24 @@ test("a valid cert does not cover a signature from a different key", () => {
   const cert = issueCert(alice, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: certNow });
   expectError(sealAsAgent(cert, mallory), bobContext(), "bad_signature");
 });
+
+// ---- Forward compatibility: a newer sender may add signed fields an older reader doesn't know. ----
+
+test("a header carrying a signed field this version doesn't know still opens", () => {
+  const { h, c } = parts(sealFromAlice(0, null));
+  const opened = openOk(signAs({ ...h, future: "ignored" }, c, alice), bobContext());
+  assert.deepEqual(opened.body, body);
+});
+
+test("an unsigned extra key on the outer envelope is still refused", () => {
+  const wire = JSON.parse(text(sealFromAlice(0, null))) as Record<string, unknown>;
+  expectError(bytes(canonicalize({ ...wire, x: 1 } as never)), bobContext(), "malformed");
+});
+
+test("a body carrying a field this version doesn't know opens, and the unknown field is dropped", () => {
+  const { h } = parts(sealFromAlice(0, null));
+  const plaintext = new TextEncoder().encode(canonicalize({ ...body, from: alice.pid, future: "ignored" } as never));
+  const c = sodium.to_base64(sodium.crypto_box_seal(plaintext, bob.boxPub), sodium.base64_variants.ORIGINAL);
+  const opened = openOk(signAs(h as never, c, alice), bobContext());
+  assert.deepEqual(opened.body, body);
+});
