@@ -15,5 +15,9 @@ export function blobsStore(name = "agent-mailbox"): Store {
       return (await store.set(key, bytes, { onlyIfNew: true })).modified;
     },
     list: async (prefix) => (await store.list({ prefix })).blobs.map((blob) => blob.key),
+    // Blobs returns directories as full prefixes; the contract wants the bare
+    // child segment. Stripping the prefix and any trailing "/" covers both forms.
+    listDirectories: async (prefix) =>
+      (await store.list({ prefix, directories: true })).directories.map((dir) => dir.slice(prefix.length).replace(/\/$/, "")),
   };
 }

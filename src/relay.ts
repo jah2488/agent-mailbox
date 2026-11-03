@@ -12,8 +12,18 @@ export type Store = {
   readonly get: (key: string) => Promise<Uint8Array<ArrayBuffer> | null>;
   /** Writes only if the key is absent; true when this call created it. */
   readonly createOnly: (key: string, value: Uint8Array<ArrayBuffer>) => Promise<boolean>;
+  /** Full keys under prefix, in no promised order. */
   readonly list: (prefix: string) => Promise<readonly string[]>;
+  /** Names of the immediate child segments under prefix (prefix ends in "/"), in no promised order. */
+  readonly listDirectories: (prefix: string) => Promise<readonly string[]>;
 };
+
+/**
+ * Inbox index entries are grouped 1000 seqs to a bucket, so a caught-up reader
+ * lists only its sender's newest bucket, not that sender's whole history.
+ * Blobs list has no start-after, so buckets are what bound a read.
+ */
+const INBOX_BUCKET = 1000;
 
 export type RelayDeps = {
   readonly store: Store;
@@ -22,11 +32,15 @@ export type RelayDeps = {
 };
 
 const PID = "[a-z2-7]{16}";
-const LOG_ROUTE = new RegExp(`^/log/(${PID})/(0|[1-9][0-9]{0,15})$`);
+// 15 digits keeps every routable seq inside Number.MAX_SAFE_INTEGER.
+const LOG_ROUTE = new RegExp(`^/log/(${PID})/(0|[1-9][0-9]{0,14})$`);
 const INBOX_ROUTE = new RegExp(`^/inbox/(${PID})$`);
 
-const logKey = (from: string, seq: number) => `log/${from}/${String(seq).padStart(16, "0")}`;
-const inboxKey = (to: string, from: string, seq: number) => `inbox/${to}/${from}/${String(seq).padStart(16, "0")}`;
+const pad = (n: number, width: number) => String(n).padStart(width, "0");
+const bucketOf = (seq: number) => pad(Math.floor(seq / INBOX_BUCKET), 13);
+const logKey = (from: string, seq: number) => `log/${from}/${pad(seq, 16)}`;
+const senderPrefix = (to: string, from: string) => `inbox/${to}/${from}/`;
+const inboxKey = (to: string, from: string, seq: number) => `${senderPrefix(to, from)}${bucketOf(seq)}/${pad(seq, 16)}`;
 
 const reply = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -45,9 +59,10 @@ export async function handle(req: Request, deps: RelayDeps): Promise<Response> {
   const url = new URL(req.url);
   const log = LOG_ROUTE.exec(url.pathname);
   if (log !== null) {
-    const [, from, seq] = log as unknown as [string, Pid, string];
-    if (req.method === "PUT") return putEnvelope(from, Number(seq), req, deps);
-    if (req.method === "GET") return getEnvelope(from, Number(seq), req, url, deps);
+    const from = log[1] as Pid;
+    const seq = Number(log[2]);
+    if (req.method === "PUT") return putEnvelope(from, seq, req, deps);
+    if (req.method === "GET") return getEnvelope(from, seq, req, url, deps);
     return refuse(405, "method_not_allowed");
   }
   const inbox = INBOX_ROUTE.exec(url.pathname);
@@ -100,10 +115,14 @@ async function settleExisting(stored: Uint8Array, wire: Uint8Array, to: Pid, fro
 
 /** Verifies a signed read and spends its nonce. Returns the caller's pid, or a refusal. */
 async function authorize(req: Request, url: URL, { store, roots, now }: RelayDeps): Promise<Pid | Response> {
-  const auth = verifyRequest(req.headers.get("authorization"), { method: req.method, path: url.pathname + url.search }, roots, now());
+  const target = { method: req.method, host: url.host, path: url.pathname + url.search };
+  const auth = verifyRequest(req.headers.get("authorization"), target, roots, now());
   if (!auth.ok) return refuse(401, "unauthorized");
   // Hash the nonce so a caller-chosen string never becomes a raw storage key.
-  const nonceKey = `nonce/${auth.pid}/${sodium.to_hex(sodium.crypto_generichash(16, auth.nonce))}`;
+  // The minute bucket lets a future sweep drop whole buckets older than the
+  // skew window; until that sweep exists, one tiny blob per read accumulates.
+  const minute = auth.at.toISOString().slice(0, 16);
+  const nonceKey = `nonce/${auth.pid}/${minute}/${sodium.to_hex(sodium.crypto_generichash(16, auth.nonce))}`;
   if (!(await store.createOnly(nonceKey, new Uint8Array()))) return refuse(401, "replayed");
   return auth.pid;
 }
@@ -111,11 +130,14 @@ async function authorize(req: Request, url: URL, { store, roots, now }: RelayDep
 async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps: RelayDeps): Promise<Response> {
   const caller = await authorize(req, url, deps);
   if (caller instanceof Response) return caller;
+  // One answer for "absent", "not yours" and "sender since removed from the
+  // allowlist", so no root can probe another root's log length.
+  const notFound = refuse(404, "not_found");
   const wire = await deps.store.get(logKey(from, seq));
-  if (wire === null) return refuse(404, "not_found");
+  if (wire === null) return notFound;
   const outer = verifyOuter(wire, deps.roots);
-  if (!outer.ok) return refuse(500, "stored_envelope_invalid");
-  if (caller !== outer.header.from && caller !== outer.header.to) return refuse(403, "forbidden");
+  if (!outer.ok) return outer.error === "unknown_sender" ? notFound : refuse(500, "stored_envelope_invalid");
+  if (caller !== outer.header.from && caller !== outer.header.to) return notFound;
   return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });
 }
 
@@ -125,14 +147,18 @@ async function listInbox(to: Pid, req: Request, url: URL, deps: RelayDeps): Prom
   if (caller !== to) return refuse(403, "forbidden");
 
   const after = parseAfter(url.searchParams.get("after"));
-  const prefix = `inbox/${to}/`;
-  const entries = (await deps.store.list(prefix))
-    .map((key) => {
-      const [from = "", seq = ""] = key.slice(prefix.length).split("/");
-      return { from, seq: Number(seq) };
-    })
-    .filter(({ from, seq }) => seq > (after.get(from) ?? -1));
+  const perSender = await Promise.all([...deps.roots.keys()].map((from) => newFromSender(to, from, after.get(from) ?? -1, deps.store)));
+  const entries = perSender.flat().sort((a, b) => (a.from === b.from ? a.seq - b.seq : a.from < b.from ? -1 : 1));
   return reply(200, { entries });
+}
+
+/** Entries from one sender above the caller's head, reading only buckets that can hold them. */
+async function newFromSender(to: Pid, from: Pid, head: number, store: Store): Promise<readonly { from: Pid; seq: number }[]> {
+  const prefix = senderPrefix(to, from);
+  const firstBucket = bucketOf(head + 1);
+  const buckets = (await store.listDirectories(prefix)).filter((bucket) => bucket >= firstBucket);
+  const keys = (await Promise.all(buckets.map((bucket) => store.list(`${prefix}${bucket}/`)))).flat();
+  return keys.map((key) => ({ from, seq: Number(key.slice(key.lastIndexOf("/") + 1)) })).filter(({ seq }) => seq > head);
 }
 
 /** "pid:seq,pid:seq" -> the caller's known head per sender. Malformed parts are ignored. */

@@ -14,23 +14,37 @@ const BASE = "https://relay.test";
 const NOW = new Date("2026-11-02T12:00:00Z");
 const body: Body = { tag: "ask", ref: "01JREF", payload: { q: "status?" } };
 
-function memoryStore(): Store {
+// The Store contract promises no order, so this fake returns listings in
+// reverse on purpose: any ordering the relay relies on must come from the core.
+function memoryStore(): Store & { readonly listed: string[] } {
   const data = new Map<string, Uint8Array<ArrayBuffer>>();
+  const listed: string[] = [];
   return {
+    listed,
     get: async (key) => data.get(key) ?? null,
     createOnly: async (key, value) => {
       if (data.has(key)) return false;
       data.set(key, value);
       return true;
     },
-    list: async (prefix) => [...data.keys()].filter((k) => k.startsWith(prefix)).sort(),
+    list: async (prefix) => {
+      listed.push(prefix);
+      return [...data.keys()].filter((k) => k.startsWith(prefix)).sort().reverse();
+    },
+    listDirectories: async (prefix) => {
+      const children = [...data.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length).split("/"));
+      return [...new Set(children.filter((parts) => parts.length > 1).map((parts) => parts[0]!))].sort().reverse();
+    },
   };
 }
 
-function relay(store: Store = memoryStore(), now: Date = NOW) {
-  const roots: ReadonlyMap<Pid, Peer> = new Map([alice, bob, mallory].map((id) => [id.pid, toPeer(id)]));
+const allRoots: ReadonlyMap<Pid, Peer> = new Map([alice, bob, mallory].map((id) => [id.pid, toPeer(id)]));
+
+function relay(store: Store = memoryStore(), now: Date = NOW, roots: ReadonlyMap<Pid, Peer> = allRoots) {
   return (req: Request) => handle(req, { store, roots, now: () => now });
 }
+
+const HOST = new URL(BASE).host;
 
 function envelope(from: Identity, to: Identity, seq: number, prev: Hash | null): Uint8Array<ArrayBuffer> {
   const sealed = seal({ from, to: toPeer(to), seq, prev, ts: NOW.toISOString(), body });
@@ -42,7 +56,7 @@ const put = (from: Identity, seq: number, wire: Uint8Array<ArrayBuffer>) =>
   new Request(`${BASE}/log/${from.pid}/${seq}`, { method: "PUT", body: wire, headers: { "content-type": "application/json" } });
 
 function signedGet(path: string, as: Identity, at: Date = NOW, nonce?: string): Request {
-  const auth = signRequest({ method: "GET", path, ts: at.toISOString(), ...(nonce ? { nonce } : {}) }, as);
+  const auth = signRequest({ method: "GET", host: HOST, path, ts: at.toISOString(), ...(nonce ? { nonce } : {}) }, as);
   return new Request(`${BASE}${path}`, { headers: { authorization: auth } });
 }
 
@@ -138,15 +152,17 @@ test("a replayed read request is refused", async () => {
 
 test("a signed request for one path cannot be reused on another", async () => {
   const send = relay();
-  const auth = signRequest({ method: "GET", path: `/inbox/${bob.pid}`, ts: NOW.toISOString() }, bob);
+  const auth = signRequest({ method: "GET", host: HOST, path: `/inbox/${bob.pid}`, ts: NOW.toISOString() }, bob);
   const res = await send(new Request(`${BASE}/log/${alice.pid}/0`, { headers: { authorization: auth } }));
   assert.equal(res.status, 401);
 });
 
-test("only the sender or the recipient can fetch an envelope", async () => {
+// A non-party sees 404 whether or not the seq exists, so an allowlisted root
+// cannot map another root's log length.
+test("only the sender or the recipient can fetch an envelope; others can't tell it exists", async () => {
   const send = relay();
   await send(put(alice, 0, envelope(alice, bob, 0, null)));
-  assert.equal((await send(signedGet(`/log/${alice.pid}/0`, mallory))).status, 403);
+  assert.equal((await send(signedGet(`/log/${alice.pid}/0`, mallory))).status, 404);
   assert.equal((await send(signedGet(`/log/${alice.pid}/0`, alice))).status, 200);
   assert.equal((await send(signedGet(`/log/${alice.pid}/9`, bob))).status, 404);
 });
@@ -189,17 +205,64 @@ test("a retry after a crash between log write and index write repairs the index"
 
 test("a signed request is bound to its method", async () => {
   const path = `/inbox/${bob.pid}`;
-  const auth = signRequest({ method: "POST", path, ts: NOW.toISOString() }, bob);
+  const auth = signRequest({ method: "POST", host: HOST, path, ts: NOW.toISOString() }, bob);
   assert.equal((await relay()(new Request(`${BASE}${path}`, { headers: { authorization: auth } }))).status, 401);
 });
 
 test("a request whose signed fields were altered is refused", async () => {
   const path = `/inbox/${bob.pid}`;
-  const auth = signRequest({ method: "GET", path, ts: NOW.toISOString() }, bob);
+  const auth = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, bob);
   const claim = JSON.parse(Buffer.from(auth.slice("AgentMailbox ".length), "base64url").toString()) as Record<string, string>;
   const altered = { ...claim, t: new Date(NOW.getTime() + 1000).toISOString() };
   const forged = "AgentMailbox " + Buffer.from(JSON.stringify(altered)).toString("base64url");
   assert.equal((await relay()(new Request(`${BASE}${path}`, { headers: { authorization: forged } }))).status, 401);
+});
+
+test("an authorization claim that decodes to null is 401, not a crash", async () => {
+  const path = `/inbox/${bob.pid}`;
+  const res = await relay()(new Request(`${BASE}${path}`, { headers: { authorization: "AgentMailbox " + Buffer.from("null").toString("base64url") } }));
+  assert.equal(res.status, 401);
+});
+
+test("a signed request is bound to its host", async () => {
+  const path = `/inbox/${bob.pid}`;
+  const auth = signRequest({ method: "GET", host: "other-relay.test", path, ts: NOW.toISOString() }, bob);
+  assert.equal((await relay()(new Request(`${BASE}${path}`, { headers: { authorization: auth } }))).status, 401);
+});
+
+test("a signed request is bound to its query string", async () => {
+  const path = `/inbox/${bob.pid}`;
+  const auth = signRequest({ method: "GET", host: HOST, path, ts: NOW.toISOString() }, bob);
+  const res = await relay()(new Request(`${BASE}${path}?after=${alice.pid}:0`, { headers: { authorization: auth } }));
+  assert.equal(res.status, 401);
+});
+
+test("an envelope from a root later removed from the allowlist reads as 404, not 500", async () => {
+  const store = memoryStore();
+  await relay(store)(put(alice, 0, envelope(alice, bob, 0, null)));
+  const withoutAlice = new Map([...allRoots].filter(([pid]) => pid !== alice.pid));
+  assert.equal((await relay(store, NOW, withoutAlice)(signedGet(`/log/${alice.pid}/0`, bob))).status, 404);
+});
+
+test("the inbox lists only bucket prefixes at or after the caller's head", async () => {
+  const store = memoryStore();
+  const send = relay(store);
+  const a0 = envelope(alice, bob, 0, null);
+  await send(put(alice, 0, a0));
+  await send(put(alice, 1, envelope(alice, bob, 1, hashOf(a0))));
+
+  store.listed.length = 0;
+  const caughtUp = await send(signedGet(`/inbox/${bob.pid}?after=${alice.pid}:999`, bob));
+  assert.deepEqual(await json(caughtUp), { entries: [] });
+  // Every listing must be scoped to one sender's bucket (inbox/to/from/bucket/),
+  // and bucket 0 holds nothing past seq 999, so it must not be listed at all.
+  assert.ok(store.listed.every((prefix) => prefix.split("/").length === 5), `listed ${store.listed.join(", ")}`);
+  assert.ok(!store.listed.some((prefix) => prefix.endsWith(`/${alice.pid}/0000000000000/`)), `listed ${store.listed.join(", ")}`);
+
+  store.listed.length = 0;
+  const behind = await send(signedGet(`/inbox/${bob.pid}?after=${alice.pid}:0`, bob));
+  assert.deepEqual(await json(behind), { entries: [{ from: alice.pid, seq: 1 }] });
+  assert.ok(store.listed.includes(`inbox/${bob.pid}/${alice.pid}/0000000000000/`), `listed ${store.listed.join(", ")}`);
 });
 
 test("unknown routes and methods are 404 and 405", async () => {

@@ -21,6 +21,8 @@ test("an entry whose pid does not match its signing key is refused", () => {
 
 test("malformed root lists are refused, never half-loaded", () => {
   assert.equal(parseRoots("not json").ok, false);
+  assert.equal(parseRoots("").ok, false);
+  assert.deepEqual(parseRoots("[]"), { ok: false, error: "roots list is empty" });
   assert.equal(parseRoots("{}").ok, false);
   assert.equal(parseRoots(JSON.stringify([{ pid: "x" }])).ok, false);
   assert.equal(parseRoots(JSON.stringify([{ ...rootEntry(toPeer(alice)), sign_pub: "AAAA" }])).ok, false);

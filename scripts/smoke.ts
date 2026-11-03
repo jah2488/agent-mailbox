@@ -53,7 +53,7 @@ async function run(dir: string, base: string): Promise<void> {
   };
   const put = (from: Identity, seq: number, bytes: Uint8Array<ArrayBuffer>) => fetch(`${base}/log/${from.pid}/${seq}`, { method: "PUT", body: bytes, headers: { "content-type": "application/json" } });
   const get = (path: string, as: Identity) =>
-    fetch(`${base}${path}`, { headers: { authorization: signRequest({ method: "GET", path, ts: new Date().toISOString() }, as) } });
+    fetch(`${base}${path}`, { headers: { authorization: signRequest({ method: "GET", host: new URL(base).host, path, ts: new Date().toISOString() }, as) } });
 
   // Each run uses fresh identities' first seqs, so rerunning needs fresh keys.
   const first = wire(alice, bob, 0, null);

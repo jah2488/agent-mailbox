@@ -34,6 +34,7 @@ export function parseRoots(json: string): { readonly ok: true; readonly roots: R
     return { ok: false, error: "roots are not valid JSON" };
   }
   if (!Array.isArray(entries)) return { ok: false, error: "roots must be a JSON array" };
+  if (entries.length === 0) return { ok: false, error: "roots list is empty" };
 
   const peers: Peer[] = [];
   for (const [index, entry] of entries.entries()) {
