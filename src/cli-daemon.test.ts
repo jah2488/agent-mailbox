@@ -33,6 +33,7 @@ function ioFor(
     errors,
     calls,
     ask: async () => null,
+    copy: async () => false,
     color: false,
     launchAgents: join(person.deps.dir, "LaunchAgents"),
     claudeSettings: join(person.deps.dir, "claude-settings.json"),

@@ -8,19 +8,24 @@ import { readHome } from "./home.ts";
 import { fingerprintOf } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import { parseRoots } from "./roots.ts";
-import { parseRoster } from "./roster.ts";
 
 /** answers are typed in order at each wizard question; when they run out, there's no terminal to ask. */
-async function freshIo(answers: readonly string[] = []): Promise<CliIo & { readonly lines: string[]; readonly errors: string[]; readonly asked: string[] }> {
+async function freshIo(answers: readonly string[] = []): Promise<CliIo & { readonly lines: string[]; readonly errors: string[]; readonly asked: string[]; readonly copied: string[] }> {
   const dir = await mkdtemp(join(tmpdir(), "mailbox-cli-"));
   const lines: string[] = [];
   const errors: string[] = [];
   const asked: string[] = [];
+  const copied: string[] = [];
   const queue = [...answers];
   return {
     lines,
     errors,
     asked,
+    copied,
+    copy: async (text) => {
+      copied.push(text);
+      return true;
+    },
     ask: async (question) => {
       asked.push(question);
       return queue.shift() ?? null;
@@ -39,7 +44,7 @@ async function freshIo(answers: readonly string[] = []): Promise<CliIo & { reado
   };
 }
 
-test("keygen creates a home and a key, and whoami prints a roster entry others can add", async () => {
+test("keygen creates a home and a key, and whoami says who you are in words, with no JSON", async () => {
   const io = await freshIo();
   assert.equal(await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], io), 0);
   const home = await readHome(io.deps.dir);
@@ -48,11 +53,11 @@ test("keygen creates a home and a key, and whoami prints a roster entry others c
 
   io.lines.length = 0;
   assert.equal(await run(["whoami"], io), 0);
-  const entryLine = io.lines.find((l) => l.startsWith("{"));
-  assert.ok(entryLine, io.lines.join("\n"));
-  const parsed = parseRoster(`[${entryLine}]`);
-  assert.ok(parsed.ok);
-  assert.ok(io.lines.some((l) => /fingerprint: ([a-z2-7]{4} ){5}[a-z2-7]{4}/.test(l)), io.lines.join("\n"));
+  const text = io.lines.join("\n");
+  assert.match(text, /Justin on relay\.example/);
+  assert.match(text, new RegExp(fingerprintOf(home.me.signPub)));
+  assert.match(text, /mailbox invite/);
+  assert.ok(!text.includes("{"), text);
 });
 
 test("keygen refuses to overwrite an existing identity", async () => {
@@ -63,48 +68,75 @@ test("keygen refuses to overwrite an existing identity", async () => {
   assert.equal((await readHome(io.deps.dir)).me.name, "Justin");
 });
 
-async function adasWhoami(): Promise<{ readonly entry: string; readonly fingerprint: string }> {
+/** Ada's invite, exactly as `mailbox invite --print` gives it, and the fingerprint she'd read out. */
+async function adasInvite(): Promise<{ readonly command: string; readonly fingerprint: string }> {
   const ada = await freshIo();
   await run(["keygen", "--name", "Ada", "--relay", "https://relay.example"], ada);
   ada.lines.length = 0;
-  await run(["whoami"], ada);
-  return {
-    entry: ada.lines.find((l) => l.startsWith("{"))!,
-    fingerprint: ada.lines.find((l) => l.startsWith("fingerprint: "))!.slice("fingerprint: ".length),
-  };
+  assert.equal(await run(["invite", "--print"], ada), 0);
+  assert.equal(ada.lines.length, 1, "--print writes only the command");
+  return { command: ada.lines[0]!, fingerprint: fingerprintOf((await readHome(ada.deps.dir)).me.signPub) };
 }
 
-test("peer add trusts a key only with the fingerprint its owner read out", async () => {
-  const ada = await adasWhoami();
-  const justin = await freshIo();
+/** Runs a pasted `mailbox ...` command line the way a shell would hand it over. */
+const runPasted = (command: string, io: CliIo) => run(command.replace(/^mailbox /, "").split(" "), io);
+
+test("invite copies the exact command a teammate runs, and says to read the fingerprint on a call", async () => {
+  const ada = await freshIo();
+  await run(["keygen", "--name", "Ada", "--relay", "https://relay.example"], ada);
+  ada.lines.length = 0;
+  assert.equal(await run(["invite"], ada), 0);
+  assert.match(ada.copied.at(-1) ?? "", /^mailbox peer add am1-[A-Za-z0-9_-]+$/);
+  const text = ada.lines.join("\n");
+  assert.match(text, /Copied/);
+  assert.match(text, new RegExp(`read them your fingerprint.*${fingerprintOf((await readHome(ada.deps.dir)).me.signPub)}`, "s"));
+});
+
+test("pasting an invite shows the fingerprint and adds the person only once you confirm it was read to you", async () => {
+  const ada = await adasInvite();
+  const justin = await freshIo(["y"]);
   await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
   justin.lines.length = 0;
-  assert.equal(await run(["peer", "add", ada.entry, "--fingerprint", ada.fingerprint], justin), 0);
+
+  assert.equal(await runPasted(ada.command, justin), 0, justin.errors.join("\n"));
+  assert.match(justin.lines.join("\n"), new RegExp(ada.fingerprint));
+  assert.match(justin.asked[0]!, /Did Ada read you this fingerprint/);
   assert.match(justin.lines.join("\n"), /Added Ada/);
   assert.equal((await readHome(justin.deps.dir)).contacts.size, 2);
 });
 
-test("peer add without a fingerprint, or with the wrong one, trusts nothing", async () => {
-  const ada = await adasWhoami();
+test("anything but yes adds nothing", async () => {
+  const ada = await adasInvite();
+  for (const answer of ["n", "", "maybe"]) {
+    const justin = await freshIo([answer]);
+    await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
+    assert.equal(await runPasted(ada.command, justin), 1);
+    assert.match(justin.lines.join("\n") + justin.errors.join("\n"), /Nothing added/);
+    assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
+  }
+});
+
+test("with no terminal to confirm in, as when an agent runs it, an invite is refused", async () => {
+  const ada = await adasInvite();
   const justin = await freshIo();
   await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
-  assert.equal(await run(["peer", "add", ada.entry], justin), 2);
-  assert.match(justin.errors.join("\n"), /--fingerprint/);
-  assert.equal(await run(["peer", "add", ada.entry, "--fingerprint", "aaaa bbbb cccc dddd eeee ffff"], justin), 1);
-  assert.match(justin.errors.join("\n"), /fingerprint does not match/);
+  assert.equal(await runPasted(ada.command, justin), 2);
+  assert.match(justin.errors.join("\n"), /run it yourself in a terminal/);
   assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
 });
 
-test("peer add rejects an entry whose pid does not match its key", async () => {
-  const io = await freshIo();
-  await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], io);
-  const other = await freshIo();
-  await run(["keygen", "--name", "Grace", "--relay", "https://relay.example"], other);
-  other.lines.length = 0;
-  await run(["whoami"], other);
-  const forged = JSON.stringify({ ...JSON.parse(other.lines.find((l) => l.startsWith("{"))!), pid: "aaaaaaaaaaaaaaaa" });
-  assert.equal(await run(["peer", "add", forged, "--fingerprint", "aaaa bbbb cccc dddd eeee ffff"], io), 1);
-  assert.match(io.errors.join("\n"), /pid does not match/);
+test("an invite whose key doesn't match its pid, or that isn't an invite at all, is refused before any question", async () => {
+  const ada = await adasInvite();
+  const token = ada.command.split(" ").at(-1)!;
+  const entry = JSON.parse(Buffer.from(token.slice("am1-".length), "base64url").toString()) as Record<string, unknown>;
+  const forged = "am1-" + Buffer.from(JSON.stringify({ ...entry, pid: "aaaaaaaaaaaaaaaa" })).toString("base64url");
+  const justin = await freshIo(["y"]);
+  await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], justin);
+  assert.equal(await run(["peer", "add", forged], justin), 1);
+  assert.match(justin.errors.join("\n"), /pid does not match/);
+  assert.equal(await run(["peer", "add", "hello"], justin), 1);
+  assert.match(justin.errors.join("\n"), /not an invite/);
+  assert.deepEqual(justin.asked, []);
 });
 
 test("roots prints an allowlist the relay accepts, covering me and my contacts", async () => {
@@ -178,7 +210,7 @@ test("setup asks for the relay, then the name it will be known by there, re-aski
   const home = await readHome(io.deps.dir);
   assert.deepEqual([home.me.name, home.me.relay], ["Anil", "https://relay.example"]);
   assert.ok(await io.deps.keys.load(home.me.pid));
-  assert.ok(io.lines.some((l) => /mailbox whoami/.test(l)));
+  assert.ok(io.lines.some((l) => /mailbox invite/.test(l)));
   assert.ok(io.lines.some((l) => /fingerprint/i.test(l)));
 });
 

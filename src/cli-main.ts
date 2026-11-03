@@ -1,5 +1,5 @@
 // Process entry for the `mailbox` command (bin/mailbox).
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { createInterface, type Interface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
@@ -50,6 +50,13 @@ process.exitCode = await run(process.argv.slice(2), {
   claudeSettings: join(homedir(), ".claude", "settings.json"),
   ask,
   color: process.stdout.isTTY === true && process.env["NO_COLOR"] === undefined,
+  copy: (text) =>
+    new Promise((done) => {
+      const child = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
+      child.on("error", () => done(false));
+      child.on("close", (code) => done(code === 0));
+      child.stdin.end(text);
+    }),
   out: (line) => console.log(line),
   err: (line) => console.error(line),
   repoRoot,

@@ -22,9 +22,9 @@ It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin
 
 Then, once per teammate:
 
-1. Send them the line `mailbox whoami` prints, and get theirs.
-2. On a call, read each other your fingerprints.
-3. Run `mailbox peer add '<their line>' --fingerprint "<what they read you>"`. A key whose fingerprint doesn't match is refused.
+1. Run `mailbox invite`. It copies the exact command your teammates run to add you (`mailbox peer add am1-...`). Paste it to them; it holds only public keys.
+2. On a call or in person, read each other your fingerprints (`mailbox whoami` shows yours).
+3. Run each teammate's invite command. It shows their fingerprint and adds them only after you confirm they read you that fingerprint, so a tampered invite is caught.
 
 Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`.
 
@@ -56,6 +56,7 @@ mailbox policy show     # the policy in force, and its version
 
 ```sh
 mailbox status                 # who you are, your fingerprint, and what is running
+mailbox invite                 # copy the command a teammate runs to add you
 mailbox peers                  # contacts and their fingerprints
 mailbox sync                   # fetch new mail now
 mailbox hook install|remove    # the inbox hook in ~/.claude/settings.json (the installer adds it)

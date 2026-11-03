@@ -73,3 +73,23 @@ export function parseRoster(json: string): { readonly ok: true; readonly contact
   }
   return { ok: true, contacts: new Map(contacts.map((c) => [c.pid, c])) };
 }
+
+const INVITE_PREFIX = "am1-";
+
+/**
+ * A person's roster entry as one paste-safe word: base64url, so it survives
+ * Slack, shells and line wrapping without quotes. Public keys only.
+ */
+export function inviteToken(c: Contact): string {
+  return INVITE_PREFIX + Buffer.from(JSON.stringify(rosterEntry(c))).toString("base64url");
+}
+
+/** The contact an invite names, checked exactly as a roster entry is (pid against key, name, relay). */
+export function readInvite(token: string): { readonly ok: true; readonly contact: Contact } | { readonly ok: false; readonly error: string } {
+  const notInvite = { ok: false, error: "that's not an invite; ask them for the command `mailbox invite` copies" } as const;
+  if (!token.startsWith(INVITE_PREFIX)) return notInvite;
+  const json = Buffer.from(token.slice(INVITE_PREFIX.length), "base64url").toString("utf8");
+  const parsed = parseRoster(`[${json}]`);
+  if (!parsed.ok) return json.trim().startsWith("{") ? { ok: false, error: parsed.error.replace(/^roster 0: /, "invite rejected: ") } : notInvite;
+  return { ok: true, contact: [...parsed.contacts.values()][0]! };
+}

@@ -102,6 +102,7 @@ echo
 ok "$(bold "Installed.")"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) warn "Add $bin_dir to your PATH to run mailbox by name." ;; esac
 printf '\n  %s\n' "$(bold "Everyday commands")"
+printf '    %s   %s\n' "$(cmd "mailbox invite       ")" "copy the command a teammate runs to add you"
 printf '    %s   %s\n' "$(cmd "mailbox status       ")" "who you are, and what's running"
 printf '    %s   %s\n' "$(cmd "mailbox daemon start ")" "let your agent answer while you're busy (off: mailbox daemon stop)"
 printf '    %s   %s\n' "$(cmd "mailbox review       ")" "what's waiting on you"
