@@ -229,7 +229,7 @@ async function uninstall(io: CliIo): Promise<number> {
   }
   io.out("Your identity, contacts, mail and audit log are kept. To delete them too:");
   io.out(`  rm -rf '${io.deps.dir}' '${io.repoRoot}'`);
-  io.out("  security delete-generic-password -s agent-mailbox; security delete-generic-password -s agent-mailbox-agent");
+  io.out("  security delete-generic-password -s agent-mailbox   (and -s agent-mailbox-agent; repeat each until it says the item could not be found)");
   return 0;
 }
 
