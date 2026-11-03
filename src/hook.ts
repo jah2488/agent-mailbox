@@ -1,15 +1,15 @@
 // Claude Code UserPromptSubmit hook. Whatever it prints joins the prompt's
-// context, so it prints a line when mail is waiting (and, once a day, when a
-// newer version is out) and nothing otherwise. It must never slow down or
-// fail a prompt: every error is swallowed, both checks are throttled, and
-// together they are capped at CHECK_TIMEOUT_MS.
+// context, so it prints a line when mail is waiting and, once a day, when a
+// newer version is out or the daemon cert is running out; otherwise nothing.
+// It must never slow down or fail a prompt: every error is swallowed, every
+// check is throttled, and together they are capped at CHECK_TIMEOUT_MS.
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkInbox } from "./client.ts";
 import { depsFromEnv, isDevCheckout } from "./config.ts";
-import { inboxNotice, shouldCheck, updateDue, updateNotice } from "./hook-core.ts";
+import { certNotice, inboxNotice, shouldCheck, updateDue, updateNotice } from "./hook-core.ts";
 
 const CHECK_TIMEOUT_MS = 1_500;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,12 +39,25 @@ async function update(dir: string, now: Date): Promise<string | null> {
   return updateNotice(exec, root);
 }
 
+/** Once a day. Reads agent.json directly: importing the daemon's modules would load Cedar on every prompt. */
+async function cert(dir: string, now: Date): Promise<string | null> {
+  const cache = join(dir, "cert-check.json");
+  if (!updateDue(await readDate(cache, "checkedAt"), now)) return null;
+  const expires = await readFile(join(dir, "agent.json"), "utf8")
+    .then((raw) => (JSON.parse(raw) as { c?: { expires?: unknown } }).c?.expires)
+    .catch(() => undefined);
+  const notice = certNotice(typeof expires === "string" ? expires : null, now);
+  // Only a shown warning starts the daily quiet period, so a cert that enters its last week is mentioned the same day.
+  if (notice !== null) await writeFile(cache, JSON.stringify({ checkedAt: now.toISOString() }));
+  return notice;
+}
+
 async function main(): Promise<void> {
   const deps = depsFromEnv();
   const now = deps.now();
   const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), CHECK_TIMEOUT_MS).unref());
   const settle = (p: Promise<string | null>) => Promise.race([p.catch(() => null), timeout]);
-  const notices = await Promise.all([settle(inbox(deps, now)), settle(update(deps.dir, now))]);
+  const notices = await Promise.all([settle(inbox(deps, now)), settle(update(deps.dir, now)), settle(cert(deps.dir, now))]);
   for (const notice of notices) if (notice !== null) process.stdout.write(`${notice}\n`);
 }
 

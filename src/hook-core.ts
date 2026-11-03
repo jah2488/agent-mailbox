@@ -41,3 +41,19 @@ export async function updateNotice(exec: Exec, root: string): Promise<string | n
   if (local.code !== 0 || remote.code !== 0 || local.output === "" || remoteSha === "" || local.output.trim() === remoteSha) return null;
   return "agent-mailbox: a newer version is available. Tell the user they can run `mailbox update` in a terminal, then restart Claude Code.";
 }
+
+/** Warn about the daemon's cert this long before it expires. Certs last 30 days. */
+export const CERT_WARNING_MS = 7 * 86_400_000;
+
+/**
+ * One line once the daemon's cert is inside its last week or past it, so it
+ * never quietly stops answering. null expires means there is no daemon.
+ */
+export function certNotice(expires: string | null, now: Date): string | null {
+  const left = expires === null ? Number.NaN : Date.parse(expires) - now.getTime();
+  if (Number.isNaN(left) || left > CERT_WARNING_MS) return null;
+  const renew = "Tell the user to run `mailbox daemon setup` in a terminal to renew it for 30 days.";
+  if (left <= 0) return `agent-mailbox: the user's daemon certificate has expired, so their daemon has stopped answering. ${renew}`;
+  const days = Math.floor(left / 86_400_000);
+  return `agent-mailbox: the user's daemon certificate expires in ${days === 0 ? "less than a day" : `${days} day${days === 1 ? "" : "s"}`}. ${renew}`;
+}

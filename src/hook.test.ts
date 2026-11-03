@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { inboxNotice, shouldCheck, updateDue, updateNotice, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
+import { certNotice, inboxNotice, shouldCheck, updateDue, updateNotice, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
 
 const now = new Date("2026-11-02T12:00:00Z");
 
@@ -47,4 +47,26 @@ test("an install at main, or a check that fails or times out, says nothing", asy
   assert.equal(await updateNotice(git("aaa111", "aaa111"), "/opt/agent-mailbox"), null);
   assert.equal(await updateNotice(git("aaa111", "", { remote: 128 }), "/opt/agent-mailbox"), null);
   assert.equal(await updateNotice(git("", "bbb222", { local: 128 }), "/opt/agent-mailbox"), null);
+});
+
+// ---- Daemon cert expiry ----
+
+const DAY = 86_400_000;
+const expiresIn = (ms: number) => new Date(now.getTime() + ms).toISOString();
+
+test("a cert with a week or more left, or no daemon at all, says nothing", () => {
+  assert.equal(certNotice(null, now), null);
+  assert.equal(certNotice(expiresIn(8 * DAY), now), null);
+});
+
+test("a cert inside its last week says how many days are left and how to renew", () => {
+  assert.equal(
+    certNotice(expiresIn(3 * DAY + 1000), now),
+    "agent-mailbox: the user's daemon certificate expires in 3 days. Tell the user to run `mailbox daemon setup` in a terminal to renew it for 30 days.",
+  );
+  assert.match(certNotice(expiresIn(2 * 3600_000), now) ?? "", /expires in less than a day/);
+});
+
+test("an expired cert says the daemon has stopped answering", () => {
+  assert.match(certNotice(expiresIn(-DAY), now) ?? "", /expired, so their daemon has stopped answering/);
 });

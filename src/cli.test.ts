@@ -212,3 +212,14 @@ test("setup on a machine that already has an identity keeps it and asks nothing"
   assert.equal((await readHome(io.deps.dir)).me.name, "Justin");
   assert.ok(io.lines.some((l) => /already set up as Justin/.test(l)));
 });
+
+test("setup on an existing identity renews the daemon cert for another 30 days (mailbox update runs this)", async () => {
+  const io = await freshIo();
+  await run(["keygen", "--name", "Justin", "--relay", "https://relay.example"], io);
+  await run(["daemon", "setup"], { ...io, deps: { ...io.deps, now: () => new Date(Date.now() - 25 * 86_400_000) } });
+  const before = Date.parse(JSON.parse(await readFile(join(io.deps.dir, "agent.json"), "utf8")).c.expires);
+
+  assert.equal(await run(["setup"], io), 0, io.errors.join("\n"));
+  const after = Date.parse(JSON.parse(await readFile(join(io.deps.dir, "agent.json"), "utf8")).c.expires);
+  assert.ok(after - before > 24 * 86_400_000, `renewed by ${(after - before) / 86_400_000} days`);
+});
