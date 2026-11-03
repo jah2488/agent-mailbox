@@ -40,7 +40,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const PID_PATTERN = /^[a-z2-7]{16}$/;
 const ERROR_CODE = /^[a-z_]{1,64}$/;
 export type Outgoing = { readonly to: string; readonly tag: string; readonly text?: string; readonly payload?: Json; readonly reply_to?: string };
-export type SendResult = { readonly ref: string; readonly seq: number; readonly delivered: boolean; readonly error?: string };
+/** toName is the contact the `to` argument resolved to, so callers report a name rather than echo raw input. */
+export type SendResult = { readonly ref: string; readonly seq: number; readonly toName: string; readonly delivered: boolean; readonly error?: string };
 export type SyncResult = { readonly received: number; readonly errors: readonly string[] };
 export type InboxCheck = { readonly waiting: number; readonly unread: number; readonly from: readonly string[] };
 
@@ -129,7 +130,7 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
       // duplicate under a new seq; the next flush re-PUTs the same bytes (200).
       error = `delivered, but saving local state failed: ${(writeError as Error).message}`;
     }
-    return { ref: body.ref, seq, delivered, ...(error === undefined ? {} : { error }) };
+    return { ref: body.ref, seq, toName: recipient.name, delivered, ...(error === undefined ? {} : { error }) };
   });
 }
 

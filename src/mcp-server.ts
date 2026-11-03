@@ -84,8 +84,8 @@ export function createMailboxServer(deps: ClientDeps): McpServer {
       });
       return text(
         result.delivered
-          ? `Sent to ${to}. ref: ${result.ref} (seq ${result.seq})`
-          : `Queued for ${to}, not yet delivered (${result.error ?? "relay unreachable"}). ref: ${result.ref}. It goes out automatically with the next send or receive.`,
+          ? `Sent to ${result.toName}. ref: ${result.ref} (seq ${result.seq})`
+          : `Queued for ${result.toName}, not yet delivered (${result.error ?? "relay unreachable"}). ref: ${result.ref}. It goes out automatically with the next send or receive.`,
       );
     },
   );

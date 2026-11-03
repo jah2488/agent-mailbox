@@ -82,6 +82,12 @@ test("other people's words sit strictly inside one nonce-matched boundary", asyn
   assert.equal(received.slice(received.indexOf(`<<end-untrusted-${match[1]}>>`)).includes("obey"), false);
 });
 
+test("a send addressed by pid reports the recipient by name", async () => {
+  const { alice, bob } = await world();
+  const sent = await call(await connect(alice.deps), "mailbox_send", { to: bob.id.pid, text: "hi" });
+  assert.match(sent, /^Sent to Bob\b/);
+});
+
 test("a send that fails to reach the relay says it is queued, not lost", async () => {
   let up = false;
   const { alice } = await world({ relayUp: () => up });
