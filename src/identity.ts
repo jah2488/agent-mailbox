@@ -28,8 +28,19 @@ function base32(bytes: Uint8Array): string {
   return bits > 0 ? out + BASE32[(buffer << (5 - bits)) & 31] : out;
 }
 
+const keyDigest = (signPub: Uint8Array) => base32(createHash("sha256").update(signPub).digest());
+
+/**
+ * What two people read aloud to each other before trusting a key: 120 bits,
+ * in groups of four so it survives being spoken. Longer than the 80-bit pid,
+ * because this comparison is the root of all trust.
+ */
+export function fingerprintOf(signPub: Uint8Array): string {
+  return (keyDigest(signPub).slice(0, 24).match(/.{4}/g) ?? []).join(" ");
+}
+
 export function pidOf(signPub: Uint8Array): Pid {
-  return base32(createHash("sha256").update(signPub).digest()).slice(0, 16) as Pid;
+  return keyDigest(signPub).slice(0, 16) as Pid;
 }
 
 // Two keypairs: reusing one key across signing and encryption couples the

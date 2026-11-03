@@ -11,8 +11,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@netlify/blobs": "11.1.7",
-    "libsodium-wrappers": "0.7.15"
+    "libsodium-wrappers": "0.7.15",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/libsodium-wrappers": "0.7.14",

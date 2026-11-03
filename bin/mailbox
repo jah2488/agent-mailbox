@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the TypeScript CLI directly; Node >= 22.18 strips types with no build step.
+# Resolves symlinks so it works when linked onto PATH.
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec node "$here/../src/cli-main.ts" "$@"

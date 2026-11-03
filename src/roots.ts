@@ -38,12 +38,20 @@ export function parseRoots(json: string): { readonly ok: true; readonly roots: R
 
   const peers: Peer[] = [];
   for (const [index, entry] of entries.entries()) {
-    const signPub = decodeKey(entry?.sign_pub);
-    const boxPub = decodeKey(entry?.box_pub);
-    if (signPub === null || boxPub === null) return { ok: false, error: `root ${index}: keys must be 32-byte base64` };
-    const pid = pidOf(signPub);
-    if (entry.pid !== pid) return { ok: false, error: `root ${index}: pid does not match sign_pub` };
-    peers.push({ pid, signPub, boxPub });
+    const peer = readRootEntry(entry);
+    if (typeof peer === "string") return { ok: false, error: `root ${index}: ${peer}` };
+    peers.push(peer);
   }
   return { ok: true, roots: new Map(peers.map((peer) => [peer.pid, peer])) };
+}
+
+/** One entry's keys, or why they're unusable. Extra fields (name, relay) are ignored. */
+export function readRootEntry(entry: unknown): Peer | string {
+  const record = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+  const signPub = decodeKey(record["sign_pub"]);
+  const boxPub = decodeKey(record["box_pub"]);
+  if (signPub === null || boxPub === null) return "keys must be 32-byte base64";
+  const pid = pidOf(signPub);
+  if (record["pid"] !== pid) return "pid does not match sign_pub";
+  return { pid, signPub, boxPub };
 }

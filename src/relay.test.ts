@@ -4,6 +4,7 @@ import { generateIdentity, toPeer, type Identity, type Peer, type Pid } from "./
 import { hashOf, seal, type Body, type Hash } from "./envelope.ts";
 import { signRequest } from "./request-auth.ts";
 import { handle, type Store } from "./relay.ts";
+import { memoryStore } from "./memory-store.ts";
 
 const alice = generateIdentity();
 const bob = generateIdentity();
@@ -13,31 +14,6 @@ const stranger = generateIdentity();
 const BASE = "https://relay.test";
 const NOW = new Date("2026-11-02T12:00:00Z");
 const body: Body = { tag: "ask", ref: "01JREF", payload: { q: "status?" } };
-
-// The Store contract promises no order, so this fake returns listings in
-// reverse on purpose: any ordering the relay relies on must come from the core.
-function memoryStore(): Store & { readonly listed: string[]; readonly keys: () => readonly string[] } {
-  const data = new Map<string, Uint8Array<ArrayBuffer>>();
-  const listed: string[] = [];
-  return {
-    listed,
-    keys: () => [...data.keys()],
-    get: async (key) => data.get(key) ?? null,
-    createOnly: async (key, value) => {
-      if (data.has(key)) return false;
-      data.set(key, value);
-      return true;
-    },
-    list: async (prefix) => {
-      listed.push(prefix);
-      return [...data.keys()].filter((k) => k.startsWith(prefix)).sort().reverse();
-    },
-    listDirectories: async (prefix) => {
-      const children = [...data.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length).split("/"));
-      return [...new Set(children.filter((parts) => parts.length > 1).map((parts) => parts[0]!))].sort().reverse();
-    },
-  };
-}
 
 const allRoots: ReadonlyMap<Pid, Peer> = new Map([alice, bob, mallory].map((id) => [id.pid, toPeer(id)]));
 
