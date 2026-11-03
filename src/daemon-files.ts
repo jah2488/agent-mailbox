@@ -16,6 +16,7 @@ const POLICY_TEXT = "policy.cedar";
 const POLICY = "policy.json";
 const POLICY_FLOOR = "policy-version";
 const RESPONDER = "responder.json";
+const SINCE = "daemon-since";
 
 export const shareDir = (dir: string) => join(dir, "share");
 
@@ -37,13 +38,24 @@ export async function readCert(dir: string): Promise<SignedCert | null> {
 
 export const writeCert = (dir: string, cert: SignedCert) => writeJson(join(dir, CERT), cert);
 
-/** First-run scaffolding. Never overwrites what the owner already has. */
-export async function initDaemonFiles(dir: string): Promise<void> {
-  await mkdir(join(shareDir(dir), "status"), { recursive: true, mode: 0o700 });
-  await mkdir(join(shareDir(dir), "notes"), { recursive: true, mode: 0o700 });
-  await writeFile(join(dir, POLICY_TEXT), DEFAULT_POLICY, { flag: "wx", mode: 0o600 }).catch((error: NodeJS.ErrnoException) => {
+const createOnce = (path: string, text: string) =>
+  writeFile(path, text, { flag: "wx", mode: 0o600 }).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "EEXIST") throw error;
   });
+
+/** First-run scaffolding. Never overwrites what the owner already has. */
+export async function initDaemonFiles(dir: string, now: Date): Promise<void> {
+  await mkdir(join(shareDir(dir), "status"), { recursive: true, mode: 0o700 });
+  await mkdir(join(shareDir(dir), "notes"), { recursive: true, mode: 0o700 });
+  await createOnce(join(dir, POLICY_TEXT), DEFAULT_POLICY);
+  // Asks received before the first setup were the owner's to see. Fixed once,
+  // so a restarted daemon still owes everything that arrived after it.
+  await createOnce(join(dir, SINCE), `${now.toISOString()}\n`);
+}
+
+export async function readSince(dir: string): Promise<string | null> {
+  const text = (await readText(join(dir, SINCE)))?.trim() ?? "";
+  return Number.isNaN(Date.parse(text)) ? null : text;
 }
 
 async function floorOf(dir: string): Promise<number> {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { run, type CliIo } from "./cli.ts";
-import { receive, send } from "./client.ts";
+import { receive, send, sync } from "./client.ts";
 import { readCert } from "./daemon-files.ts";
 import { nextEntry, verifyAudit } from "./audit.ts";
 import { generateIdentity } from "./identity.ts";
@@ -147,4 +147,15 @@ test("the audit log is signed by the cert's audit key, not the key that signs ma
   const text = await readFile(join(bob.deps.dir, "audit.jsonl"), "utf8");
   assert.equal(verifyAudit(text, unb64(cert.c.audit_pub!)).ok, true);
   assert.equal(verifyAudit(text, unb64(cert.c.agent_sign_pub)).ok, false);
+});
+
+test("an ask synced after setup but before this daemon process started is still answered (crash and restart)", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await sync(bob.deps); // a previous daemon process got this far, then died
+
+  assert.equal(await run(["daemon", "once"], io), 0);
+
+  assert.equal((await receive(alice.deps, { reply_to: asked.ref })).messages.length, 1);
 });

@@ -6,7 +6,7 @@ import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./au
 import { certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
 import type { CliIo } from "./cli.ts";
 import type { ClientDeps } from "./client.ts";
-import { initDaemonFiles, loadPolicy, readCert, readResponder, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
+import { initDaemonFiles, loadPolicy, readCert, readResponder, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
 import { runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
@@ -59,7 +59,7 @@ async function loadAgent(io: CliIo, home: Home): Promise<Loaded | null> {
   return { client: { ...io.deps, keys: io.agentKeys, agentCert: cert }, audit, name: verified.name };
 }
 
-function daemonDeps(io: CliIo, home: Home, loaded: Loaded, report: (event: AuditEvent) => void): DaemonDeps {
+function daemonDeps(io: CliIo, home: Home, loaded: Loaded, since: string, report: (event: AuditEvent) => void): DaemonDeps {
   const dir = io.deps.dir;
   return {
     client: loaded.client,
@@ -70,7 +70,7 @@ function daemonDeps(io: CliIo, home: Home, loaded: Loaded, report: (event: Audit
       await appendAudit(dir, loaded.audit.signSec, event);
       report(event);
     },
-    since: io.deps.now().toISOString(),
+    since,
   };
 }
 
@@ -101,7 +101,7 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
     return 1;
   }
   await writeCert(io.deps.dir, cert);
-  await initDaemonFiles(io.deps.dir);
+  await initDaemonFiles(io.deps.dir, io.deps.now());
   if (!(await loadPolicy(io.deps.dir, home.me)).ok) await signPolicyFile(io.deps.dir, root);
 
   io.out(`Agent "${cert.c.name}" certified for ${home.me.name} until ${cert.c.expires.slice(0, 10)}. Re-run this command to renew.`);
@@ -116,7 +116,12 @@ async function runOnce(io: CliIo, forever: boolean): Promise<number> {
   if (home === null) return 1;
   const loaded = await loadAgent(io, home);
   if (loaded === null) return 1;
-  const deps = daemonDeps(io, home, loaded, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
+  const since = await readSince(io.deps.dir);
+  if (since === null) {
+    io.err("no daemon start point recorded; run: mailbox daemon setup");
+    return 1;
+  }
+  const deps = daemonDeps(io, home, loaded, since, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
   await deps.audit({ kind: "started", data: { agent: loaded.name, mode: forever ? "run" : "once" } });
   if (forever) await runDaemon(deps, { intervalMs: INTERVAL_MS, signal: io.stop, log: io.err });
   else await tick(deps, new Set());

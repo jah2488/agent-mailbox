@@ -79,3 +79,10 @@ test("unanswered asks are those from others after the daemon started, with no re
   };
   assert.deepEqual(unanswered(state, { me: me.pid, since: "2026-11-02T11:30:00Z" }).map((m) => m.body.ref), ["q2"]);
 });
+
+test("a reply to one asker does not count as answering another asker who chose the same ref", () => {
+  const other = generateIdentity();
+  const replied: Outbound = { from: me.pid, to: ada.pid, seq: 0, hash: "b2:01" as never, ts: "t", wire: null, delivered: true, body: { tag: "reply", ref: "r", reply_to: "q1", payload: null } };
+  const state: MailboxState = { ...emptyState, inbox: [ask({}, { ref: "q1" }), ask({ from: other.pid }, { ref: "q1" })], outbox: [replied] };
+  assert.deepEqual(unanswered(state, { me: me.pid, since: "2026-11-02T11:30:00Z" }).map((m) => m.from), [other.pid]);
+});

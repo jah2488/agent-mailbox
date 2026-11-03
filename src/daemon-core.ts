@@ -63,6 +63,7 @@ export function settleAnswer(result: ResponderResult): ResponderResult {
  * state rather than tracked separately, so a crash mid-answer is retried.
  */
 export function unanswered(state: MailboxState, options: { readonly me: Pid; readonly since: string }): readonly Inbound[] {
-  const repliedTo = new Set(state.outbox.flatMap((m) => (m.body.reply_to === undefined ? [] : [m.body.reply_to])));
-  return state.inbox.filter((m) => m.body.tag === "ask" && m.from !== options.me && m.receivedAt >= options.since && !repliedTo.has(m.body.ref));
+  // Refs are chosen by each sender, so a reply settles an ask only from the person it went to.
+  const repliedTo = new Set(state.outbox.flatMap((m) => (m.body.reply_to === undefined ? [] : [`${m.to} ${m.body.reply_to}`])));
+  return state.inbox.filter((m) => m.body.tag === "ask" && m.from !== options.me && m.receivedAt >= options.since && !repliedTo.has(`${m.from} ${m.body.ref}`));
 }
