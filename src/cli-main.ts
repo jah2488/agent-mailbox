@@ -1,23 +1,32 @@
 // Process entry for the `mailbox` command (bin/mailbox).
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { run } from "./cli.ts";
 import { agentKeysFromEnv, depsFromEnv } from "./config.ts";
 
+// One terminal reader for the whole command, so lines typed or pasted ahead
+// of a question queue for it instead of being swallowed by the one before.
+let terminal: { readonly rl: Interface; readonly lines: AsyncIterator<string> } | null = null;
+
 /** One question at the terminal. No terminal, or Ctrl-D, is null, which the wizard turns into "pass the flag". */
 async function ask(question: string): Promise<string | null> {
   if (!process.stdin.isTTY) return null;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const closed = new Promise<null>((resolve) => rl.once("close", () => resolve(null)));
-  try {
-    return await Promise.race([rl.question(question), closed]);
-  } finally {
-    rl.close();
+  if (terminal === null) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.on("SIGINT", () => process.exit(130)); // readline captures Ctrl-C; honour it as a cancel
+    terminal = { rl, lines: rl[Symbol.asyncIterator]() };
   }
+  terminal.rl.setPrompt(question);
+  terminal.rl.prompt();
+  const next = await terminal.lines.next();
+  return next.done === true ? null : next.value;
 }
+
+/** An open reader would keep the process alive after the command is done. */
+const closeTerminal = () => terminal?.rl.close();
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // launchd stops the daemon with SIGTERM; finishing the current tick first keeps the audit log whole.
@@ -38,3 +47,4 @@ process.exitCode = await run(process.argv.slice(2), {
   err: (line) => console.error(line),
   repoRoot,
 });
+closeTerminal();

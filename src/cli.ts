@@ -141,7 +141,7 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
     }
     const home = await createIdentity(io, name, relay);
     if (home === null) return 1;
-    io.out(`You're ${home.me.name} on ${new URL(relay).host}. Your secret key is in the Keychain.`);
+    io.out(`You're ${home.me.name} on ${new URL(relay).host}. Your secret key is stored on this machine and never leaves it.`);
   }
   const daemon = await daemonCommand(["setup"], io);
   if (daemon !== 0 || existing !== null) return daemon;
