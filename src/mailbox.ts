@@ -17,6 +17,8 @@ export type Inbound = {
   readonly receivedAt: string;
   /** Whether the person's own session sent it, or an agent acting for them. */
   readonly via: Via;
+  /** 0 for a first-hand message; agents raise it, and only 0 is ever answered automatically. */
+  readonly hops: number;
 };
 
 export type Outbound = {
@@ -80,7 +82,7 @@ export function pendingDelivery(state: MailboxState): readonly Outbound[] {
 
 export function recordReceived(state: MailboxState, opened: Opened, receivedAt: string): MailboxState {
   const { header, body, hash, chain, via } = opened;
-  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt, via };
+  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt, via, hops: header.hops };
   return { ...state, chains: { ...state.chains, [header.from]: chain }, inbox: [...state.inbox, inbound] };
 }
 

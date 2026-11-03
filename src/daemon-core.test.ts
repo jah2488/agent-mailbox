@@ -25,11 +25,12 @@ const ask = (over: Partial<Inbound> = {}, body: Partial<Inbound["body"]> = {}): 
   receivedAt: "2026-11-02T12:00:01Z",
   consumed: false,
   via: { kind: "owner" },
+  hops: 0,
   ...over,
   body: { tag: "ask", ref: "q1", payload: null, prose: "what are you on?", ...body },
 });
 
-const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada", hops: 0 };
+const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada" };
 
 test("an ask is answered only from files policy allows, and flagged if any of them is flag-tier", () => {
   const plan = planAnswer(ask(), ctx);
@@ -48,7 +49,7 @@ test("an asker policy gives nothing to defers without calling the model", () => 
 test("the daemon answers asks only: never replies, never agents, never forwarded mail", () => {
   assert.equal(planAnswer(ask({}, { tag: "reply" }), ctx).kind, "ignore");
   assert.equal(planAnswer(ask({ via: { kind: "agent", name: "daemon" } }), ctx).kind, "ignore");
-  assert.equal(planAnswer(ask(), { ...ctx, hops: 1 }).kind, "ignore");
+  assert.equal(planAnswer(ask({ hops: 1 }), ctx).kind, "ignore");
 });
 
 test("a drafted answer carrying something secret-shaped becomes a defer", () => {

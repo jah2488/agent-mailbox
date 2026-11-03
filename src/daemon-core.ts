@@ -18,13 +18,11 @@ export type PlanContext = {
   readonly files: readonly ShareFile[];
   readonly owner: string;
   readonly askerName: string;
-  /** The ask's hop count. Only first-hand asks (0) are answered, so daemons can't chain. */
-  readonly hops: number;
 };
 
 export function planAnswer(ask: Inbound, ctx: PlanContext): Plan {
   // Asks from people only. Never replies, never another agent's mail, never anything forwarded.
-  if (ask.body.tag !== "ask" || ask.via.kind === "agent" || ctx.hops > 0) return { kind: "ignore" };
+  if (ask.body.tag !== "ask" || ask.via.kind === "agent" || ask.hops > 0) return { kind: "ignore" };
   const decided = ctx.files.map((file) => ({ file, tier: decide(ctx.policy, { principal: ask.from, path: file.path, contacts: ctx.contacts }).tier }));
   const usable = decided.filter((d) => d.tier === "allow" || d.tier === "flag");
   if (usable.length === 0) return { kind: "defer", reason: "nothing you share covers this asker" };

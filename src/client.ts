@@ -42,7 +42,7 @@ export type ClientDeps = {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const PID_PATTERN = /^[a-z2-7]{16}$/;
 const ERROR_CODE = /^[a-z_]{1,64}$/;
-export type Outgoing = { readonly to: string; readonly tag: string; readonly text?: string; readonly payload?: Json; readonly reply_to?: string };
+export type Outgoing = { readonly to: string; readonly tag: string; readonly text?: string; readonly payload?: Json; readonly reply_to?: string; readonly hops?: number };
 /** toName is the contact the `to` argument resolved to, so callers report a name rather than echo raw input. */
 export type SendResult = { readonly ref: string; readonly seq: number; readonly toName: string; readonly delivered: boolean; readonly error?: string };
 export type SyncResult = { readonly received: number; readonly errors: readonly string[] };
@@ -116,7 +116,7 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
       ...(message.text === undefined ? {} : { prose: message.text }),
     };
     const { seq, prev } = nextLink(home.state);
-    const sealed = seal({ from: identity, to: recipient, seq, prev, ts: now.toISOString(), body, ...(deps.agent === undefined ? {} : { agent: deps.agent }) });
+    const sealed = seal({ from: identity, to: recipient, seq, prev, ts: now.toISOString(), body, ...(message.hops === undefined ? {} : { hops: message.hops }), ...(deps.agent === undefined ? {} : { agent: deps.agent }) });
     if (!sealed.ok) throw new Error(`could not seal message: ${sealed.error}`);
 
     // Persist before any network call: a crash after this point retries the

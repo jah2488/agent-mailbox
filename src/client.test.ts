@@ -20,6 +20,15 @@ test("alice asks bob by name; bob syncs and takes exactly her message", async ()
   assert.equal(messages[0]!.body.ref, sent.ref);
 });
 
+test("a send's hop count arrives with the message", async () => {
+  const { alice, bob } = await world();
+  await send(alice.deps, { to: "bob", tag: "reply", text: "from my agent", hops: 1 });
+  await send(alice.deps, { to: "bob", tag: "ask", text: "first-hand" });
+  await sync(bob.deps);
+  const hops = (await readHome(bob.deps.dir)).state.inbox.map((m) => [m.body.prose, m.hops]);
+  assert.deepEqual(hops, [["from my agent", 1], ["first-hand", 0]]);
+});
+
 test("a reply threads back to the original ask on the asker's side", async () => {
   const { alice, bob } = await world();
   const ask = await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
