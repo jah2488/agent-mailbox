@@ -40,6 +40,19 @@ mailbox daemon once     # one pass in the foreground, to try it
 mailbox review          # what the daemon deferred or flagged for you
 mailbox audit verify    # check the audit log is intact and signed
 mailbox daemon revoke   # tell every contact to refuse this daemon from now on
+mailbox daemon setup    # renew the daemon's cert; certs last 30 days, and an expired one stops the daemon
+mailbox policy show     # the policy in force, and its version
+```
+
+`daemon start` adds a launch agent, so macOS shows a background-item notice, and endpoint security software may flag it.
+
+## Everyday commands
+
+```sh
+mailbox peers                  # contacts and their fingerprints
+mailbox sync                   # fetch new mail now
+mailbox hook install|remove    # the inbox hook in ~/.claude/settings.json (the installer adds it)
+mailbox help                   # every command
 ```
 
 ## Update
@@ -68,8 +81,9 @@ It stops the daemon, removes it from login, unregisters the MCP server, removes 
 - `src/roots.ts`: the allowlist format and parser (`MAILBOX_ROOTS`).
 - `src/blobs-store.ts`, `netlify/functions/relay.ts`: the Netlify shell around the core.
 - `scripts/smoke.ts`: end-to-end check of a running relay.
-- `src/client.ts`, `src/mcp-server.ts`, `src/hook.ts`, `src/cli.ts`: the client, the Claude Code MCP server, the inbox hook and the `mailbox` command.
-- `src/cert.ts`, `src/policy.ts`, `src/share.ts`, `src/responder.ts`, `src/daemon-core.ts`, `src/daemon.ts`, `src/audit.ts`: agent certs, the signed Cedar policy, the share-folder reader, the responder, the daemon's decisions and loop, and the audit log.
+- `src/client.ts`, `src/mcp-server.ts`, `src/hook.ts`, `src/cli.ts`, `src/cli-daemon.ts`, `src/claude-settings.ts`: the client, the Claude Code MCP server, the inbox hook, the `mailbox` command, and the edit that adds the hook to Claude Code's settings.
+- `src/cert.ts`, `src/policy.ts`, `src/share.ts`, `src/responder.ts`, `src/daemon-core.ts`, `src/daemon.ts`, `src/audit.ts`: agent certs, the signed Cedar policy, the share-folder reader, the responder, the daemon's decisions and loop, and the audit log. `src/daemon-files.ts` holds the daemon's files: cert, signed policy, start point and lock.
+- `install.sh`: the one-step installer, which `mailbox update` reruns.
 
 ## Checks
 
