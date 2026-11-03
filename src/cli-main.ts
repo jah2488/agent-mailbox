@@ -9,18 +9,24 @@ import { agentKeysFromEnv, depsFromEnv } from "./config.ts";
 
 // One terminal reader for the whole command, so lines typed or pasted ahead
 // of a question queue for it instead of being swallowed by the one before.
-let terminal: { readonly rl: Interface; readonly lines: AsyncIterator<string> } | null = null;
+let terminal: { readonly rl: Interface; readonly lines: AsyncIterator<string>; closed: boolean } | null = null;
 
 /** One question at the terminal. No terminal, or Ctrl-D, is null, which the wizard turns into "pass the flag". */
 async function ask(question: string): Promise<string | null> {
   if (!process.stdin.isTTY) return null;
   if (terminal === null) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const opened = { rl, lines: rl[Symbol.asyncIterator](), closed: false };
     rl.on("SIGINT", () => process.exit(130)); // readline captures Ctrl-C; honour it as a cancel
-    terminal = { rl, lines: rl[Symbol.asyncIterator]() };
+    rl.on("close", () => (opened.closed = true));
+    terminal = opened;
   }
-  terminal.rl.setPrompt(question);
-  terminal.rl.prompt();
+  // After end of input, lines already typed are still handed out; only prompting again would throw.
+  if (terminal.closed) process.stdout.write(question);
+  else {
+    terminal.rl.setPrompt(question);
+    terminal.rl.prompt();
+  }
   const next = await terminal.lines.next();
   return next.done === true ? null : next.value;
 }

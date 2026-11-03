@@ -64,7 +64,7 @@ else
   ok "Code installed" "$dir"
 fi
 step "Installing dependencies"
-(cd "$dir" && npm ci --omit=dev --no-audit --no-fund --no-progress --loglevel=error > /dev/null)
+(cd "$dir" && npm ci --omit=dev --no-audit --no-fund --no-progress --no-update-notifier --loglevel=error > /dev/null)
 ok "Dependencies installed"
 
 mkdir -p "$bin_dir"
