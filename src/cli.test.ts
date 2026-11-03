@@ -23,6 +23,8 @@ async function freshIo(): Promise<CliIo & { readonly lines: string[]; readonly e
     agentKeys: fileKeyStore(join(dir, "agent-keys.json")),
     env: {},
     stop: AbortSignal.abort(),
+    exec: async () => ({ code: 0, output: "" }),
+    launchAgents: join(dir, "LaunchAgents"),
   };
 }
 

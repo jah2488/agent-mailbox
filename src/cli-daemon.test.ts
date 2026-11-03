@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nextEntry, verifyAudit } from "./audit.ts";
 import { run, type CliIo } from "./cli.ts";
@@ -18,12 +19,24 @@ const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.
 // A stand-in for `claude -p`: reads the prompt, answers in claude's --output-format json shape.
 const FAKE_RESPONDER = [process.execPath, "-e", "process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({structured_output:{answer:'All green.'}})))"];
 
-function ioFor(person: Person, env: NodeJS.ProcessEnv = {}): CliIo & { readonly lines: string[]; readonly errors: string[] } {
+/** exitCodes makes a program fail with that code, as a missing launchd job or a broken claude would. */
+function ioFor(
+  person: Person,
+  env: NodeJS.ProcessEnv = {},
+  exitCodes: Readonly<Record<string, number>> = {},
+): CliIo & { readonly lines: string[]; readonly errors: string[]; readonly calls: string[][]; readonly launchAgents: string } {
   const lines: string[] = [];
   const errors: string[] = [];
+  const calls: string[][] = [];
   return {
     lines,
     errors,
+    calls,
+    launchAgents: join(person.deps.dir, "LaunchAgents"),
+    exec: async (program, args) => {
+      calls.push([program, ...args]);
+      return { code: exitCodes[program] ?? 0, output: "" };
+    },
     deps: person.deps,
     agentKeys: fileKeyStore(join(person.deps.dir, "agent-keys.json")),
     env,
@@ -100,19 +113,58 @@ test("audit verify fails, naming the entry, once the log is edited", async () =>
   assert.match(io.errors.join("\n"), /entry 2: bad signature/);
 });
 
-test("install writes a launchd plist into the mailbox home and only prints the commands that load it", async () => {
+test("daemon start loads a launchd agent, and daemon stop unloads it and deletes the plist", async () => {
   const { bob } = await world();
   const io = ioFor(bob, { MAILBOX_KEYSTORE: "file", PATH: "/usr/bin:/bin" });
   await run(["daemon", "setup"], io);
   io.lines.length = 0;
-  assert.equal(await run(["daemon", "install"], io), 0, io.errors.join("\n"));
 
+  assert.equal(await run(["daemon", "start"], io), 0, io.errors.join("\n"));
   const label = `com.agent-mailbox.daemon.${bob.id.pid}`;
-  const plist = await readFile(join(bob.deps.dir, `${label}.plist`), "utf8");
+  const plistPath = join(io.launchAgents, `${label}.plist`);
+  const plist = await readFile(plistPath, "utf8");
   assert.match(plist, new RegExp(`<string>${label}</string>`));
   assert.match(plist, /<string>daemon<\/string>\s*<string>run<\/string>/);
   assert.match(plist, /<key>MAILBOX_KEYSTORE<\/key>\s*<string>file<\/string>/);
-  assert.match(io.lines.join("\n"), /launchctl bootstrap gui\/\$\(id -u\)/);
+  assert.deepEqual(io.calls.at(-1), ["launchctl", "bootstrap", `gui/${process.getuid!()}`, plistPath]);
+  assert.match(io.lines.join("\n"), /mailbox daemon stop/);
+
+  assert.equal(await run(["daemon", "stop"], io), 0, io.errors.join("\n"));
+  assert.deepEqual(io.calls.at(-1), ["launchctl", "bootout", `gui/${process.getuid!()}/${label}`]);
+  assert.deepEqual(await readdir(io.launchAgents), []);
+});
+
+test("daemon stop succeeds when the daemon was never started", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob, {}, { launchctl: 3 });
+  await run(["daemon", "setup"], io);
+  assert.equal(await run(["daemon", "stop"], io), 0, io.errors.join("\n"));
+});
+
+test("daemon start reports a launchctl failure instead of claiming the daemon is on", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob, {}, { launchctl: 5 });
+  await run(["daemon", "setup"], io);
+  assert.equal(await run(["daemon", "start"], io), 1);
+  assert.match(io.errors.join("\n"), /launchctl bootstrap failed/);
+});
+
+test("uninstall stops the daemon, unregisters the MCP server and removes the command, keeping keys and mail", async () => {
+  const { bob } = await world();
+  const fakeHome = await mkdtemp(join(tmpdir(), "mailbox-userhome-"));
+  await mkdir(join(fakeHome, ".local", "bin"), { recursive: true });
+  await symlink("/opt/agent-mailbox/bin/mailbox", join(fakeHome, ".local", "bin", "mailbox"));
+  const io = ioFor(bob, { HOME: fakeHome });
+  await run(["daemon", "setup"], io);
+  await run(["daemon", "start"], io);
+
+  assert.equal(await run(["uninstall"], io), 0, io.errors.join("\n"));
+  assert.ok(io.calls.some((c) => c[0] === "launchctl" && c[1] === "bootout"));
+  assert.ok(io.calls.some((c) => c.join(" ") === "claude mcp remove --scope user agent-mailbox"));
+  assert.deepEqual(await readdir(join(fakeHome, ".local", "bin")), []);
+  assert.deepEqual(await readdir(io.launchAgents), []);
+  assert.ok((await readHome(bob.deps.dir)).me, "the identity and mail stay");
+  assert.match(io.lines.join("\n"), /rm -rf/);
 });
 
 test("policy sign refuses a policy that does not parse and leaves the signed one in force", async () => {

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { auditVerify, daemonCommand, policyCommand, review } from "./cli-daemon.ts";
+import { auditVerify, daemonCommand, policyCommand, review, uninstall } from "./cli-daemon.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
@@ -19,6 +19,10 @@ export type CliIo = {
   readonly env: NodeJS.ProcessEnv;
   /** Ends `daemon run`. */
   readonly stop: AbortSignal;
+  /** Runs launchctl and claude for daemon start/stop and uninstall. Injected so tests see exactly what would run. */
+  readonly exec: (program: string, args: readonly string[]) => Promise<{ readonly code: number; readonly output: string }>;
+  /** ~/Library/LaunchAgents, where daemon start puts the plist. */
+  readonly launchAgents: string;
 };
 
 const USAGE = [
@@ -32,11 +36,12 @@ const USAGE = [
   "  install                              print the Claude Code setup commands",
   "  daemon setup [--name <agent>]        certify a daemon key and create the share folder and policy",
   "  daemon once | run                    answer waiting asks once, or every 30 s until stopped",
-  "  daemon install                       write a launchd plist and print the commands that load it",
+  "  daemon start | stop                  turn the daemon on (now and at login) or off",
   "  daemon revoke                        tell contacts to refuse the agent from now on, and retire its keys",
   "  policy sign | show                   sign policy.cedar as the next version, or print the one in force",
   "  review                               list what the daemon deferred or flagged for you",
   "  audit verify                         check the daemon's audit log is intact and signed",
+  "  uninstall                            stop the daemon, unregister from Claude Code, remove the command",
 ].join("\n");
 
 async function homeOrExplain(io: CliIo): Promise<Home | null> {
@@ -174,6 +179,8 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return policyCommand(rest, io);
     case "review":
       return review(io);
+    case "uninstall":
+      return uninstall(io);
     case "audit":
       if (rest[0] === "verify") return auditVerify(io);
       break;

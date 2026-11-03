@@ -1,4 +1,4 @@
-import { access, constants, readFile, rename, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -107,7 +107,7 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
   io.out(`Agent "${cert.c.name}" certified for ${home.me.name} until ${cert.c.expires.slice(0, 10)}. Re-run this command to renew.`);
   io.out(`Share folder: ${shareDir(io.deps.dir)}  (status/ is answered from; notes/ is answered from and flagged for your review)`);
   io.out(`Policy: ${join(io.deps.dir, "policy.cedar")}  (after editing, run: mailbox policy sign)`);
-  io.out("Try one pass now: mailbox daemon once   Start it at login: mailbox daemon install");
+  io.out("Try one pass now: mailbox daemon once   Turn it on: mailbox daemon start   Off: mailbox daemon stop");
   return 0;
 }
 
@@ -123,7 +123,7 @@ async function runOnce(io: CliIo, forever: boolean): Promise<number> {
   }
   const release = await acquireDaemonLock(io.deps.dir);
   if (release === null) {
-    io.err(`a daemon is already running for ${home.me.name}; stop it first (launchctl bootout, or Ctrl-C)`);
+    io.err(`a daemon is already running for ${home.me.name}; stop it first (mailbox daemon stop, or Ctrl-C)`);
     return 1;
   }
   try {
@@ -148,18 +148,21 @@ async function findOnPath(program: string, path: string): Promise<string | null>
 
 const xml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Writes the plist into the mailbox home and prints how to load it. Never touches ~/Library or launchctl itself. */
-async function install(io: CliIo): Promise<number> {
+const labelOf = (home: Home) => `com.agent-mailbox.daemon.${home.me.pid}`;
+const guiDomain = () => `gui/${process.getuid?.() ?? 501}`;
+
+/** Writes the launchd plist and loads it, so the daemon runs now and at every login. */
+async function start(io: CliIo): Promise<number> {
   const home = await homeOf(io);
   if (home === null) return 1;
   if ((await loadAgent(io, home)) === null) return 1;
-  const label = `com.agent-mailbox.daemon.${home.me.pid}`;
-  const plistPath = join(io.deps.dir, `${label}.plist`);
   const policy = await loadPolicy(io.deps.dir, home.me);
   if (!policy.ok) {
     io.err(`no policy in force (${policy.error}); run: mailbox policy sign`);
     return 1;
   }
+  const label = labelOf(home);
+  const plistPath = join(io.launchAgents, `${label}.plist`);
   const responder = policy.responder.command[0]!;
   const found = responder.includes("/") ? responder : await findOnPath(responder, io.env["PATH"] ?? "");
   // launchd starts with a bare PATH, so the responder's directory is carried over explicitly.
@@ -185,14 +188,48 @@ async function install(io: CliIo): Promise<number> {
     "</dict></plist>",
     "",
   ].join("\n");
-  await writeFile(plistPath, plist, { mode: 0o600 });
+  await mkdir(io.launchAgents, { recursive: true });
+  await writeFile(plistPath, plist, { mode: 0o644 });
 
+  // A restart replaces any copy already loaded; "not loaded" is the normal first-run answer.
+  await io.exec("launchctl", ["bootout", `${guiDomain()}/${label}`]);
+  const loaded = await io.exec("launchctl", ["bootstrap", guiDomain(), plistPath]);
+  if (loaded.code !== 0) {
+    io.err(`launchctl bootstrap failed (exit ${loaded.code}): ${loaded.output}`);
+    return 1;
+  }
   if (found === null) io.err(`warning: "${responder}" is not on your PATH; the daemon will defer every ask until it is`);
-  io.out(`Wrote ${plistPath}. To start the daemon now and at every login:`);
-  io.out(`  cp '${plistPath}' ~/Library/LaunchAgents/`);
-  io.out(`  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/${label}.plist`);
-  io.out(`To stop it: launchctl bootout gui/$(id -u)/${label}`);
-  io.out("macOS will show a background-item notice, and endpoint security software may flag a new launch agent.");
+  io.out(`Daemon on. It answers every 30 s and starts again at login. Log: ${join(io.deps.dir, "daemon.log")}`);
+  io.out("Turn it off: mailbox daemon stop");
+  io.out("macOS may show a background-item notice, and endpoint security software may flag a new launch agent.");
+  return 0;
+}
+
+/** Unloads the daemon and deletes its plist, so it neither runs now nor at the next login. */
+async function stop(io: CliIo): Promise<number> {
+  const home = await homeOf(io);
+  if (home === null) return 1;
+  const label = labelOf(home);
+  const unloaded = await io.exec("launchctl", ["bootout", `${guiDomain()}/${label}`]);
+  await rm(join(io.launchAgents, `${label}.plist`), { force: true });
+  io.out(unloaded.code === 0 ? "Daemon off, and removed from login." : "Daemon was not running; it is removed from login.");
+  return 0;
+}
+
+/** Turns everything off that install set up. Keys, mail and the audit log stay until the owner deletes them. */
+async function uninstall(io: CliIo): Promise<number> {
+  if ((await stop(io)) !== 0) io.err("no mailbox identity here, so there was no daemon to stop");
+  const mcp = await io.exec("claude", ["mcp", "remove", "--scope", "user", "agent-mailbox"]);
+  io.out(mcp.code === 0 ? "Removed the agent-mailbox MCP server from Claude Code." : "The agent-mailbox MCP server was not registered with Claude Code.");
+  const link = join(io.env["HOME"] ?? "", ".local", "bin", "mailbox");
+  // Only our own link: a different `mailbox` on the PATH is someone else's.
+  if ((await readlink(link).catch(() => null)) === join(io.repoRoot, "bin", "mailbox")) {
+    await rm(link);
+    io.out(`Removed ${link}.`);
+  }
+  io.out("Your identity, contacts, mail and audit log are kept. To delete them too:");
+  io.out(`  rm -rf '${io.deps.dir}' '${io.repoRoot}'`);
+  io.out("  security delete-generic-password -s agent-mailbox; security delete-generic-password -s agent-mailbox-agent");
   return 0;
 }
 
@@ -300,7 +337,7 @@ async function revoke(io: CliIo): Promise<number> {
   }
   const release = await acquireDaemonLock(io.deps.dir);
   if (release === null) {
-    io.err("stop the daemon first (launchctl bootout, or Ctrl-C), then revoke");
+    io.err("stop the daemon first (mailbox daemon stop, or Ctrl-C), then revoke");
     return 1;
   }
   try {
@@ -313,7 +350,6 @@ async function revoke(io: CliIo): Promise<number> {
     await rename(join(io.deps.dir, AUDIT_FILE), join(io.deps.dir, `audit.revoked-${stamp}.jsonl`)).catch(() => undefined);
     const queued = sent.filter((s) => !s.delivered).map((s) => s.toName);
     io.out(`Revoked agent "${cert.c.name}". Told ${sent.length} contact${sent.length === 1 ? "" : "s"}${queued.length > 0 ? ` (queued for ${queued.join(", ")}; delivered on the next sync)` : ""}.`);
-    io.out(`If it was installed: launchctl bootout gui/$(id -u)/com.agent-mailbox.daemon.${home.me.pid}`);
     io.out("For a new agent: mailbox daemon setup");
     return 0;
   } finally {
@@ -330,13 +366,15 @@ export async function daemonCommand(args: readonly string[], io: CliIo): Promise
       return runOnce(io, false);
     case "run":
       return runOnce(io, true);
-    case "install":
-      return install(io);
+    case "start":
+      return start(io);
+    case "stop":
+      return stop(io);
     case "revoke":
       return revoke(io);
   }
-  io.err("usage: mailbox daemon setup [--name <agent>] | once | run | install | revoke");
+  io.err("usage: mailbox daemon setup [--name <agent>] | once | run | start | stop | revoke");
   return 2;
 }
 
-export { auditVerify, policy as policyCommand, review };
+export { auditVerify, policy as policyCommand, review, uninstall };
