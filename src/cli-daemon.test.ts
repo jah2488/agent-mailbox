@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { run, type CliIo } from "./cli.ts";
 import { receive, send } from "./client.ts";
 import { readCert } from "./daemon-files.ts";
+import { nextEntry, verifyAudit } from "./audit.ts";
+import { generateIdentity } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
+import sodium from "./sodium.ts";
+
+const b64 = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.ORIGINAL);
+const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
 import { world, type Person } from "./test-world.ts";
 
 // A stand-in for `claude -p`: reads the prompt, answers in claude's --output-format json shape.
@@ -110,4 +116,35 @@ test("policy sign refuses a policy that does not parse and leaves the signed one
   io.lines.length = 0;
   assert.equal(await run(["policy", "show"], io), 0);
   assert.match(io.lines.join("\n"), /version 1/);
+});
+
+test("audit verify refuses a log re-signed under a swapped-in agent.json the root never signed", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await run(["daemon", "once"], io);
+
+  // Someone with write access to the home dir mints their own key and cert, then rewrites the whole log with it.
+  const forger = generateIdentity();
+  const real = (await readCert(bob.deps.dir))!;
+  const forged = { c: { ...real.c, agent_sign_pub: b64(forger.signPub), audit_pub: b64(forger.signPub) }, s: real.s };
+  await writeFile(join(bob.deps.dir, "agent.json"), JSON.stringify(forged));
+  const lines: string[] = [];
+  for (const kind of ["started", "stopped"]) lines.push(nextEntry(lines.at(-1) ?? null, forger.signSec, { kind, data: {} }));
+  await writeFile(join(bob.deps.dir, "audit.jsonl"), lines.join("\n") + "\n");
+
+  assert.equal(await run(["audit", "verify"], io), 1);
+  assert.match(io.errors.join("\n"), /agent\.json/);
+});
+
+test("the audit log is signed by the cert's audit key, not the key that signs mail", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await run(["daemon", "once"], io);
+  const cert = (await readCert(bob.deps.dir))!;
+  assert.notEqual(cert.c.audit_pub, cert.c.agent_sign_pub);
+  const text = await readFile(join(bob.deps.dir, "audit.jsonl"), "utf8");
+  assert.equal(verifyAudit(text, unb64(cert.c.audit_pub!)).ok, true);
+  assert.equal(verifyAudit(text, unb64(cert.c.agent_sign_pub)).ok, false);
 });

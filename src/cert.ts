@@ -22,9 +22,11 @@ export type CertBody = {
   readonly device: string;
   readonly issued: string;
   readonly expires: string;
+  /** The daemon's audit-log key, held apart from the key that signs mail. Absent on certs that only sign mail. */
+  readonly audit_pub?: string;
 };
 export type SignedCert = { readonly c: CertBody; readonly s: string };
-export type CertRequest = { readonly agentSignPub: Uint8Array; readonly name: string; readonly device: string; readonly now: Date; readonly ttlDays?: number };
+export type CertRequest = { readonly agentSignPub: Uint8Array; readonly auditPub?: Uint8Array; readonly name: string; readonly device: string; readonly now: Date; readonly ttlDays?: number };
 
 const b64 = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.ORIGINAL);
 const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
@@ -40,6 +42,7 @@ export function issueCert(root: Identity, request: CertRequest): SignedCert {
     device: request.device,
     issued: request.now.toISOString(),
     expires: expires.toISOString(),
+    ...(request.auditPub === undefined ? {} : { audit_pub: b64(request.auditPub) }),
   };
   return { c: body, s: b64(sodium.crypto_sign_detached(signedBytes(body), root.signSec)) };
 }
@@ -48,7 +51,7 @@ export function verifyCert(
   cert: SignedCert,
   root: Peer,
   now: Date,
-): { readonly ok: true; readonly agentSignPub: Uint8Array; readonly name: string } | { readonly ok: false; readonly error: string } {
+): { readonly ok: true; readonly agentSignPub: Uint8Array; readonly auditPub: Uint8Array | null; readonly name: string } | { readonly ok: false; readonly error: string } {
   if (cert.c.person !== root.pid) return { ok: false, error: "cert is for a different person" };
   if (!AGENT_NAME.test(cert.c.name)) return { ok: false, error: "agent name must be 1-24 of a-z 0-9 -" };
   try {
@@ -61,7 +64,7 @@ export function verifyCert(
   if (!(issued - SKEW_MS <= now.getTime())) return { ok: false, error: "cert is not valid yet" };
   if (!(now.getTime() <= expires + SKEW_MS)) return { ok: false, error: "cert has expired" };
   try {
-    return { ok: true, agentSignPub: unb64(cert.c.agent_sign_pub), name: cert.c.name };
+    return { ok: true, agentSignPub: unb64(cert.c.agent_sign_pub), auditPub: cert.c.audit_pub === undefined ? null : unb64(cert.c.audit_pub), name: cert.c.name };
   } catch {
     return { ok: false, error: "malformed cert key" };
   }
@@ -83,5 +86,6 @@ export function isCertShape(value: unknown): value is SignedCert {
   if (!record(value) || !exactly(value, ["c", "s"]) || typeof value["s"] !== "string") return false;
   const c = value["c"];
   const fields = ["person", "agent_sign_pub", "name", "device", "issued", "expires"];
-  return record(c) && exactly(c, ["v", ...fields]) && c["v"] === 1 && fields.every((k) => typeof c[k] === "string");
+  const keys = c !== null && typeof c === "object" && Object.hasOwn(c, "audit_pub") ? ["v", ...fields, "audit_pub"] : ["v", ...fields];
+  return record(c) && exactly(c, keys) && c["v"] === 1 && keys.slice(1).every((k) => typeof c[k] === "string");
 }

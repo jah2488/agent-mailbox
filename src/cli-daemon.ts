@@ -12,6 +12,9 @@ import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
 import { runResponder } from "./responder.ts";
 import { readShare } from "./share.ts";
+import sodium from "./sodium.ts";
+
+const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
 
 // `mailbox daemon|policy|review|audit`. Setup and policy signing need the
 // root key; everything the daemon itself runs uses only the agent key.
@@ -19,7 +22,7 @@ import { readShare } from "./share.ts";
 const INTERVAL_MS = 30_000;
 const AUDIT_FILE = "audit.jsonl";
 
-type Loaded = { readonly client: ClientDeps & { readonly agentCert: SignedCert }; readonly agent: Identity; readonly name: string };
+type Loaded = { readonly client: ClientDeps & { readonly agentCert: SignedCert }; readonly audit: Identity; readonly name: string };
 
 async function homeOf(io: CliIo): Promise<Home | null> {
   try {
@@ -48,12 +51,12 @@ async function loadAgent(io: CliIo, home: Home): Promise<Loaded | null> {
     io.err(`agent cert refused (${verified.error}); renew it with: mailbox daemon setup`);
     return null;
   }
-  const agent = await io.agentKeys.load(pidOf(verified.agentSignPub));
-  if (agent === null) {
-    io.err(`no key for agent "${verified.name}" in the agent key store; run: mailbox daemon setup`);
+  const audit = verified.auditPub === null ? null : await io.agentKeys.load(pidOf(verified.auditPub));
+  if (audit === null || (await io.agentKeys.load(pidOf(verified.agentSignPub))) === null) {
+    io.err(`agent "${verified.name}" is missing a key in the agent key store; run: mailbox daemon setup`);
     return null;
   }
-  return { client: { ...io.deps, keys: io.agentKeys, agentCert: cert }, agent, name: verified.name };
+  return { client: { ...io.deps, keys: io.agentKeys, agentCert: cert }, audit, name: verified.name };
 }
 
 function daemonDeps(io: CliIo, home: Home, loaded: Loaded, report: (event: AuditEvent) => void): DaemonDeps {
@@ -64,11 +67,20 @@ function daemonDeps(io: CliIo, home: Home, loaded: Loaded, report: (event: Audit
     share: async () => (await readShare(shareDir(dir))).files,
     respond: async (prompt) => runResponder(await readResponder(dir), prompt),
     audit: async (event) => {
-      await appendAudit(dir, loaded.agent.signSec, event);
+      await appendAudit(dir, loaded.audit.signSec, event);
       report(event);
     },
     since: io.deps.now().toISOString(),
   };
+}
+
+/** The stored key for this public key, or a fresh one saved to the agent key store. Never the root. */
+async function reuseOrMint(io: CliIo, root: Identity, pub: Uint8Array | null): Promise<Identity> {
+  const existing = pub === null ? null : await io.agentKeys.load(pidOf(pub));
+  if (existing !== null) return existing;
+  const minted = agentIdentity(root);
+  await io.agentKeys.save(minted);
+  return minted;
 }
 
 async function setup(args: readonly string[], io: CliIo): Promise<number> {
@@ -78,15 +90,11 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
   const root = await rootOf(io, home);
   if (root === null) return 1;
 
-  // A re-run renews the cert for the key the daemon already holds, so its audit log keeps verifying.
+  // A re-run renews the cert for the keys the daemon already holds, so its audit log keeps verifying.
   const previous = await readCert(io.deps.dir);
-  const previousKey = previous === null ? null : certifiedKeyOf(previous);
-  let agent = previousKey === null ? null : await io.agentKeys.load(pidOf(previousKey));
-  if (agent === null) {
-    agent = agentIdentity(root);
-    await io.agentKeys.save(agent);
-  }
-  const cert = issueCert(root, { agentSignPub: agent.signPub, name: values.name ?? "daemon", device: hostname(), now: io.deps.now() });
+  const agent = await reuseOrMint(io, root, previous === null ? null : certifiedKeyOf(previous));
+  const audit = await reuseOrMint(io, root, previous?.c.audit_pub === undefined ? null : unb64(previous.c.audit_pub));
+  const cert = issueCert(root, { agentSignPub: agent.signPub, auditPub: audit.signPub, name: values.name ?? "daemon", device: hostname(), now: io.deps.now() });
   const check = verifyCert(cert, home.me, io.deps.now());
   if (!check.ok) {
     io.err(check.error);
@@ -199,9 +207,15 @@ async function policy(args: readonly string[], io: CliIo): Promise<number> {
 
 async function readAudit(io: CliIo, home: Home): Promise<readonly AuditEntry[] | null> {
   const cert = await readCert(io.deps.dir);
-  const key = cert === null ? null : certifiedKeyOf(cert);
-  if (cert === null || key === null || cert.c.person !== home.me.pid) {
+  if (cert === null) {
     io.err("no agent yet; run: mailbox daemon setup");
+    return null;
+  }
+  // The root's signature on agent.json is what makes its audit key trustworthy. Judged at issue time, so an expired cert's log still verifies.
+  const trusted = verifyCert(cert, home.me, new Date(cert.c.issued));
+  const key = trusted.ok ? trusted.auditPub : null;
+  if (key === null) {
+    io.err(`agent.json is not a cert your root key signed with an audit key${trusted.ok ? "" : ` (${trusted.error})`}; the audit log cannot be trusted`);
     return null;
   }
   const text = await readFile(join(io.deps.dir, AUDIT_FILE), "utf8").catch(() => "");
