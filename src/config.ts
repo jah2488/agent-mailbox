@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ClientDeps } from "./client.ts";
@@ -24,3 +25,9 @@ export function agentKeysFromEnv(env: NodeJS.ProcessEnv = process.env): KeyStore
 }
 
 const homeFromEnv = (env: NodeJS.ProcessEnv) => env["MAILBOX_HOME"] ?? join(homedir(), ".agent-mailbox");
+
+/**
+ * A checkout with dev dependencies installed belongs to someone working on
+ * agent-mailbox: update leaves it to git, and the hook doesn't nag it.
+ */
+export const isDevCheckout = (root: string): Promise<boolean> => access(join(root, "node_modules", "typescript")).then(() => true, () => false);

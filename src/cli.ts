@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { withHook, withoutHook } from "./claude-settings.ts";
+import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
@@ -216,7 +217,7 @@ export async function uninstall(io: CliIo): Promise<number> {
 async function update(io: CliIo): Promise<number> {
   const root = io.repoRoot;
   // The installer installs without dev dependencies, which would strip a developer's toolchain.
-  if (await access(join(root, "node_modules", "typescript")).then(() => true, () => false)) {
+  if (await isDevCheckout(root)) {
     io.err(`${root} is a development checkout; update it with git pull and npm install instead`);
     return 1;
   }
