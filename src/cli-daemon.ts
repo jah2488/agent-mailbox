@@ -151,6 +151,11 @@ const xml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").
 const labelOf = (home: Home) => `com.agent-mailbox.daemon.${home.me.pid}`;
 const guiDomain = () => `gui/${process.getuid?.() ?? 501}`;
 
+/** Whether daemon start has put this person's daemon in launchd (and stop hasn't removed it). */
+export async function daemonInstalled(io: CliIo, home: Home): Promise<boolean> {
+  return access(join(io.launchAgents, `${labelOf(home)}.plist`)).then(() => true, () => false);
+}
+
 /** Writes the launchd plist and loads it, so the daemon runs now and at every login. */
 async function start(io: CliIo): Promise<number> {
   const home = await homeOf(io);

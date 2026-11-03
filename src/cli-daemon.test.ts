@@ -294,3 +294,46 @@ test("daemon revoke refuses while the daemon is running", async (t) => {
   stop.abort();
   await running;
 });
+
+test("update pulls, reruns the new installer against this checkout, and restarts a running daemon on the new code", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob);
+  await run(["daemon", "setup"], io);
+  await run(["daemon", "start"], io);
+  io.calls.length = 0;
+
+  assert.equal(await run(["update"], io), 0, io.errors.join("\n"));
+  assert.deepEqual(io.calls.map((c) => c.join(" ")), [
+    "git -C /opt/agent-mailbox pull --ff-only",
+    "env AGENT_MAILBOX_DIR=/opt/agent-mailbox bash /opt/agent-mailbox/install.sh",
+    "/opt/agent-mailbox/bin/mailbox daemon start",
+    "git -C /opt/agent-mailbox rev-parse --short HEAD",
+  ]);
+  assert.match(io.lines.join("\n"), /Restart Claude Code/);
+});
+
+test("update leaves a stopped daemon stopped", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob);
+  await run(["daemon", "setup"], io);
+  assert.equal(await run(["update"], io), 0);
+  assert.ok(!io.calls.some((c) => c.includes("daemon")));
+});
+
+test("update stops at a failed pull and runs nothing else", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob, {}, { git: 1 });
+  assert.equal(await run(["update"], io), 1);
+  assert.equal(io.calls.length, 1);
+  assert.match(io.errors.join("\n"), /git pull failed/);
+});
+
+test("update refuses in a development checkout, where the installer would strip dev dependencies", async () => {
+  const { bob } = await world();
+  const checkout = await mkdtemp(join(tmpdir(), "mailbox-devcheckout-"));
+  await mkdir(join(checkout, "node_modules", "typescript"), { recursive: true });
+  const io = { ...ioFor(bob), repoRoot: checkout };
+  assert.equal(await run(["update"], io), 1);
+  assert.deepEqual(io.calls, []);
+  assert.match(io.errors.join("\n"), /development checkout/);
+});

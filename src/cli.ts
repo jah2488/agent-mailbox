@@ -1,8 +1,8 @@
-import { mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { withHook, withoutHook } from "./claude-settings.ts";
-import { auditVerify, daemonCommand, daemonStop, policyCommand, review } from "./cli-daemon.ts";
+import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
@@ -46,6 +46,7 @@ const USAGE = [
   "  policy sign | show                   sign policy.cedar as the next version, or print the one in force",
   "  review                               list what the daemon deferred or flagged for you",
   "  audit verify                         check the daemon's audit log is intact and signed",
+  "  update                               get the latest version and restart what runs it",
   "  uninstall                            stop the daemon, unregister from Claude Code, remove the command",
 ].join("\n");
 
@@ -207,6 +208,38 @@ export async function uninstall(io: CliIo): Promise<number> {
   return 0;
 }
 
+/**
+ * Pulls the latest code into this checkout, then runs the pulled installer
+ * (dependencies, MCP registration, hook) and restarts a running daemon, both
+ * through the new code rather than this process's old copy.
+ */
+async function update(io: CliIo): Promise<number> {
+  const root = io.repoRoot;
+  // The installer installs without dev dependencies, which would strip a developer's toolchain.
+  if (await access(join(root, "node_modules", "typescript")).then(() => true, () => false)) {
+    io.err(`${root} is a development checkout; update it with git pull and npm install instead`);
+    return 1;
+  }
+  const pulled = await io.exec("git", ["-C", root, "pull", "--ff-only"]);
+  if (pulled.code !== 0) {
+    io.err(`git pull failed in ${root}; nothing was changed:\n${pulled.output}`);
+    return 1;
+  }
+  const installed = await io.exec("env", [`AGENT_MAILBOX_DIR=${root}`, "bash", join(root, "install.sh")]);
+  if (installed.code !== 0) {
+    io.err(`the installer failed after pulling:\n${installed.output}`);
+    return 1;
+  }
+  const home = await readHome(io.deps.dir).catch(() => null);
+  if (home !== null && (await daemonInstalled(io, home))) {
+    const restarted = await io.exec(join(root, "bin", "mailbox"), ["daemon", "start"]);
+    io.out(restarted.code === 0 ? "Daemon restarted on the new version." : `The daemon did not restart; run: mailbox daemon start\n${restarted.output}`);
+  }
+  const head = await io.exec("git", ["-C", root, "rev-parse", "--short", "HEAD"]);
+  io.out(`agent-mailbox is up to date${head.code === 0 && head.output !== "" ? ` (${head.output})` : ""}. Restart Claude Code to load the new MCP server.`);
+  return 0;
+}
+
 export async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -231,6 +264,8 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return policyCommand(rest, io);
     case "review":
       return review(io);
+    case "update":
+      return update(io);
     case "hook":
       return hookCommand(rest[0], io);
     case "uninstall":
