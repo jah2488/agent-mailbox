@@ -1,9 +1,11 @@
 import { mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { withHook, withoutHook } from "./claude-settings.ts";
+import { renderStatus, styles, type Fact } from "./banner.ts";
+import { hasHook, withHook, withoutHook } from "./claude-settings.ts";
 import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
+import { readCert, shareDir } from "./daemon-files.ts";
 import { sync, type ClientDeps } from "./client.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
@@ -30,12 +32,15 @@ export type CliIo = {
   readonly claudeSettings: string;
   /** Asks the person at the terminal; null when there is no terminal to ask. */
   readonly ask: (question: string) => Promise<string | null>;
+  /** Whether output goes to a terminal that wants color (a TTY, and NO_COLOR unset). */
+  readonly color: boolean;
 };
 
 const USAGE = [
   "usage: mailbox <command>",
   "  setup [--relay <url>] [--name <name>] first-run wizard: identity, daemon key, and how to share",
   "  keygen --name <name> --relay <url>   create your identity (key goes to the Keychain)",
+  "  status                               who you are, what to share, and what's running",
   "  whoami                               print your roster entry and fingerprint to share",
   '  peer add <entry> --fingerprint "…"   trust someone, after they read you their fingerprint',
   "  peers                                list contacts with fingerprints",
@@ -110,6 +115,7 @@ async function askUntil(io: CliIo, question: string, check: (raw: string) => str
  * to introduce yourself to teammates. An existing identity is kept.
  */
 async function setup(args: readonly string[], io: CliIo): Promise<number> {
+  const s = styles(io.color);
   const { values } = parseArgs({ args: [...args], options: { name: { type: "string" }, relay: { type: "string" } } });
   const existing = await readHome(io.deps.dir).catch(() => null);
   if (existing !== null) {
@@ -117,7 +123,7 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
   } else {
     const relay =
       values.relay === undefined
-        ? await askUntil(io, "Relay URL (your team's agent-mailbox relay, https://...): ", normaliseRelay, "That isn't an https URL (http is allowed only for localhost). Try again.")
+        ? await askUntil(io, `${s.accent("Relay URL")} ${s.dim("(your team's agent-mailbox relay, https://...)")}: `, normaliseRelay, "That isn't an https URL (http is allowed only for localhost). Try again.")
         : normaliseRelay(values.relay);
     if (values.relay !== undefined && relay === null) {
       io.err("--relay must be an https URL (http only for localhost)");
@@ -129,7 +135,7 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
     }
     const name =
       values.name === undefined
-        ? await askUntil(io, `What name do you want to be identified as on ${new URL(relay).host}? `, normaliseName, `A name is ${NAME_RULE}. Try again.`)
+        ? await askUntil(io, `${s.accent(`What name do you want to be identified as on ${new URL(relay).host}?`)} `, normaliseName, `A name is ${NAME_RULE}. Try again.`)
         : normaliseName(values.name);
     if (values.name !== undefined && name === null) {
       io.err(`--name must be ${NAME_RULE}`);
@@ -143,16 +149,20 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
     if (home === null) return 1;
     io.out(`You're ${home.me.name} on ${new URL(relay).host}. Your secret key is stored on this machine and never leaves it.`);
   }
-  const daemon = await daemonCommand(["setup"], io);
+  // The status panel below shows the cert, so daemon setup's own report would only repeat it.
+  const daemon = await daemonCommand(["setup"], { ...io, out: () => undefined });
   if (daemon !== 0 || existing !== null) return daemon;
   io.out("");
-  io.out("Next, introduce yourself to each teammate:");
-  io.out("  1. Run: mailbox whoami");
-  io.out("     It prints one line starting with { and a fingerprint.");
-  io.out("  2. Send that line to your teammates, in Slack or anywhere. It holds no secrets.");
-  io.out("  3. On a call, read each other your fingerprints. Then add each teammate with:");
-  io.out("     mailbox peer add '<their line>' --fingerprint \"<what they read you>\"");
-  io.out("     A line whose fingerprint doesn't match what you heard is refused.");
+  await status(io);
+  io.out("");
+  io.out(s.accent("Next: introduce yourself to each teammate"));
+  io.out(`  1. Run ${s.cmd("mailbox whoami")}. It prints one line starting with { and your ${s.bold("fingerprint")}.`);
+  io.out(`  2. Send that line to each teammate, in Slack or anywhere. ${s.dim("It holds no secrets.")}`);
+  io.out(`  3. On a call, ${s.bold("read each other your fingerprints")}, then add each teammate:`);
+  io.out(`     ${s.cmd(`mailbox peer add '<their line>' --fingerprint "<what they read you>"`)}`);
+  io.out(`     ${s.dim("A line whose fingerprint doesn't match what you heard is refused.")}`);
+  io.out(`  4. Optional: put a note on what you're working on in ${s.bold(join(shareDir(io.deps.dir), "status"))},`);
+  io.out(`     then run ${s.cmd("mailbox daemon start")} so your agent can answer teammates while you're busy.`);
   return 0;
 }
 
@@ -316,6 +326,44 @@ async function update(io: CliIo): Promise<number> {
   return 0;
 }
 
+/** The fastfetch-style block: who you are on which relay, what to share, and what's running. */
+async function status(io: CliIo): Promise<number> {
+  const home = await readHome(io.deps.dir).catch(() => null);
+  if (home === null) {
+    io.err("not set up yet; run: mailbox setup");
+    return 1;
+  }
+  const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid).map((c) => c.name);
+  const cert = await readCert(io.deps.dir);
+  const expires = cert === null ? null : Date.parse(cert.c.expires);
+  const daysLeft = expires === null ? null : Math.floor((expires - io.deps.now().getTime()) / 86_400_000);
+  const settings = await readFile(io.claudeSettings, "utf8").then((raw) => JSON.parse(raw) as unknown, () => null);
+  const version = await io.exec("git", ["-C", io.repoRoot, "rev-parse", "--short", "HEAD"]);
+  const facts: Fact[] = [
+    { key: "Name", value: home.me.name, strong: true },
+    { key: "Relay", value: new URL(home.me.relay).host },
+    { key: "Fingerprint", value: fingerprintOf(home.me.signPub), strong: true },
+    { key: "Contacts", value: others.length === 0 ? "none yet" : others.join(", ") },
+    { key: "Daemon", value: (await daemonInstalled(io, home)) ? "on, and at every login" : "off (mailbox daemon start)" },
+    {
+      key: "Certificate",
+      value:
+        expires === null || daysLeft === null
+          ? "none (mailbox daemon setup)"
+          : daysLeft < 0
+            ? "expired (mailbox daemon setup)"
+            : daysLeft <= 7
+              ? `expires in ${daysLeft} days (mailbox daemon setup)`
+              : `good until ${new Date(expires).toISOString().slice(0, 10)}`,
+    },
+    { key: "Inbox hook", value: hasHook(settings) ? "on" : "off (mailbox hook install)" },
+    ...(version.code === 0 && version.output !== "" ? [{ key: "Version", value: version.output }] : []),
+  ];
+  const title = `${home.me.name.toLowerCase().replace(/\s+/g, "-")}@agent-mailbox`;
+  for (const line of renderStatus(title, facts, io.color)) io.out(line);
+  return 0;
+}
+
 export async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -344,6 +392,8 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return review(io);
     case "update":
       return update(io);
+    case "status":
+      return status(io);
     case "hook":
       return hookCommand(rest[0], io);
     case "uninstall":

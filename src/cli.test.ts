@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type CliIo } from "./cli.ts";
 import { readHome } from "./home.ts";
+import { fingerprintOf } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import { parseRoots } from "./roots.ts";
 import { parseRoster } from "./roster.ts";
@@ -32,6 +33,7 @@ async function freshIo(answers: readonly string[] = []): Promise<CliIo & { reado
     env: {},
     stop: AbortSignal.abort(),
     exec: async () => ({ code: 0, output: "" }),
+    color: false,
     launchAgents: join(dir, "LaunchAgents"),
     claudeSettings: join(dir, "claude-settings.json"),
   };
@@ -222,4 +224,33 @@ test("setup on an existing identity renews the daemon cert for another 30 days (
   assert.equal(await run(["setup"], io), 0, io.errors.join("\n"));
   const after = Date.parse(JSON.parse(await readFile(join(io.deps.dir, "agent.json"), "utf8")).c.expires);
   assert.ok(after - before > 24 * 86_400_000, `renewed by ${(after - before) / 86_400_000} days`);
+});
+
+// ---- status ----
+
+test("status shows who you are, your fingerprint, contacts, daemon and hook beside the logo", async () => {
+  const io = await freshIo();
+  await run(["keygen", "--name", "Anil Kumar", "--relay", "https://relay.example"], io);
+  await run(["daemon", "setup"], io);
+  await run(["hook", "install"], io);
+  io.lines.length = 0;
+
+  assert.equal(await run(["status"], io), 0, io.errors.join("\n"));
+  const text = io.lines.join("\n");
+  const home = await readHome(io.deps.dir);
+  assert.match(text, /anil-kumar@agent-mailbox/);
+  assert.match(text, /Name\s+Anil Kumar/);
+  assert.match(text, /Relay\s+relay\.example/);
+  assert.match(text, new RegExp(`Fingerprint\\s+${fingerprintOf(home.me.signPub)}`));
+  assert.match(text, /Contacts\s+none yet/);
+  assert.match(text, /Daemon\s+off \(mailbox daemon start\)/);
+  assert.match(text, /Certificate\s+good until \d{4}-\d{2}-\d{2}/);
+  assert.match(text, /Inbox hook\s+on/);
+  assert.ok(!text.includes("\x1b"), "no color when io.color is false");
+});
+
+test("status before setup says how to start", async () => {
+  const io = await freshIo();
+  assert.equal(await run(["status"], io), 1);
+  assert.match(io.errors.join("\n"), /mailbox setup/);
 });

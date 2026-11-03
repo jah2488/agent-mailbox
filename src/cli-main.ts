@@ -43,6 +43,7 @@ process.exitCode = await run(process.argv.slice(2), {
   launchAgents: join(homedir(), "Library", "LaunchAgents"),
   claudeSettings: join(homedir(), ".claude", "settings.json"),
   ask,
+  color: process.stdout.isTTY === true && process.env["NO_COLOR"] === undefined,
   out: (line) => console.log(line),
   err: (line) => console.error(line),
   repoRoot,

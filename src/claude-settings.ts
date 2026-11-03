@@ -60,3 +60,12 @@ export function withHook(input: Json, command: string): Settings {
   const hooked = rebuild(settings, hooks, [...groups, { hooks: [{ type: "command", command, timeout: 5 }] }]);
   return withAskRules(hooked, [...askRulesOf(hooked).ask, SEND_ASK_RULE]);
 }
+
+/** Whether these settings already run the inbox hook, from any install path. */
+export function hasHook(input: Json): boolean {
+  try {
+    return groupsOf(input).groups.some((g) => g.hooks.some((h) => isInboxHook(h.command)));
+  } catch {
+    return false;
+  }
+}
