@@ -4,7 +4,8 @@ import { parseRoots } from "../../src/roots.ts";
 
 // Parsed once per cold start. A bad list fails every request loudly instead
 // of running with a partial allowlist.
-const roots = parseRoots(process.env["MAILBOX_ROOTS"] ?? "");
+const raw = process.env["MAILBOX_ROOTS"];
+const roots = raw === undefined ? ({ ok: false, error: "MAILBOX_ROOTS is not set" } as const) : parseRoots(raw);
 
 export default async (req: Request): Promise<Response> => {
   if (!roots.ok) {

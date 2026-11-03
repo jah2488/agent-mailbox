@@ -276,6 +276,37 @@ test("the inbox lists only bucket prefixes at or after the caller's head", async
   assert.ok(store.listed.includes(`inbox/${bob.pid}/${alice.pid}/0000000000000/`), `listed ${store.listed.join(", ")}`);
 });
 
+test("a reader past seq 999 is served from the second bucket and skips the first", async () => {
+  const store = memoryStore();
+  // Seeding the index directly: reaching seq 1000 through PUTs would need a
+  // 1001-envelope chain. The layout is inbox/{to}/{from}/{bucket13}/{seq16}.
+  await store.createOnly(`inbox/${bob.pid}/${alice.pid}/0000000000000/0000000000000999`, new Uint8Array());
+  await store.createOnly(`inbox/${bob.pid}/${alice.pid}/0000000000001/0000000000001000`, new Uint8Array());
+  const res = await relay(store)(signedGet(`/inbox/${bob.pid}?after=${alice.pid}:999`, bob));
+  assert.deepEqual(await json(res), { entries: [{ from: alice.pid, seq: 1000 }] });
+  assert.ok(store.listed.includes(`inbox/${bob.pid}/${alice.pid}/0000000000001/`), `listed ${store.listed.join(", ")}`);
+  assert.ok(!store.listed.some((prefix) => prefix.endsWith(`/${alice.pid}/0000000000000/`)), `listed ${store.listed.join(", ")}`);
+});
+
+// The fake lists in reverse, so this fails unless the core sorts.
+test("inbox entries come back in seq order however the store lists them", async () => {
+  const send = relay();
+  const a0 = envelope(alice, bob, 0, null);
+  const a1 = envelope(alice, bob, 1, hashOf(a0));
+  await send(put(alice, 0, a0));
+  await send(put(alice, 1, a1));
+  await send(put(alice, 2, envelope(alice, bob, 2, hashOf(a1))));
+  const res = await send(signedGet(`/inbox/${bob.pid}`, bob));
+  assert.deepEqual(await json(res), { entries: [0, 1, 2].map((seq) => ({ from: alice.pid, seq })) });
+});
+
+test("an 'after' seq outside the route grammar is ignored, not trusted", async () => {
+  const send = relay();
+  await send(put(alice, 0, envelope(alice, bob, 0, null)));
+  const res = await send(signedGet(`/inbox/${bob.pid}?after=${alice.pid}:${"9".repeat(24)}`, bob));
+  assert.deepEqual(await json(res), { entries: [{ from: alice.pid, seq: 0 }] });
+});
+
 test("unknown routes and methods are 404 and 405", async () => {
   const send = relay();
   assert.equal((await send(new Request(`${BASE}/nope`))).status, 404);

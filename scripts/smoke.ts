@@ -2,6 +2,7 @@
 //   node scripts/smoke.ts keys <dir>          write 3 test identities + roots.json
 //   node scripts/smoke.ts run <dir> <url>     exercise the relay; exit 1 on any failure
 // Identities are throwaway: they only exist for the relay under test.
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hashOf, seal, type Hash } from "../src/envelope.ts";
@@ -45,6 +46,11 @@ function check(label: string, actual: unknown, expected: unknown): void {
 
 async function run(dir: string, base: string): Promise<void> {
   const { alice, bob, carol } = readKeys(dir);
+  // Saved runs are evidence, so each one says where, when and what it tested.
+  const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
+  console.log(`relay ${base} | commit ${commit} | ${new Date().toISOString()}`);
+  // Never added to roots.json, so the relay must refuse it.
+  const stranger = generateIdentity();
   const runTag = Date.now();
   const wire = (from: Identity, to: Identity, seq: number, prev: Hash | null) => {
     const sealed = seal({ from, to: toPeer(to), seq, prev, ts: new Date().toISOString(), body: { tag: "ask", ref: `smoke-${runTag}`, payload: { seq } } });
@@ -69,6 +75,7 @@ async function run(dir: string, base: string): Promise<void> {
   check("bob fetches identical bytes", [fetched.status, fetchedBytes.length === first.length && sodium.memcmp(fetchedBytes, first)], [200, true]);
   check("carol cannot read bob's inbox -> 403", (await get(`/inbox/${bob.pid}`, carol)).status, 403);
   check("unsigned read -> 401", (await fetch(`${base}/inbox/${bob.pid}`)).status, 401);
+  check("sender outside the allowlist -> 403", (await put(stranger, 0, wire(stranger, bob, 0, null))).status, 403);
 
   // U2: concurrent PUTs of different envelopes at one seq. Exactly one may win.
   const rounds = 50;
@@ -83,7 +90,8 @@ async function run(dir: string, base: string): Promise<void> {
     const stored = await get(`/log/${alice.pid}/${seq}`, alice);
     prev = hashOf(new Uint8Array(await stored.arrayBuffer()));
   }
-  check(`U2 race: ${rounds} rounds, rounds where both PUTs won`, doubleWins, 0);
+  console.log(`U2 race: ${doubleWins} of ${rounds} rounds had two winning PUTs`);
+  check(`U2 race: no round with two winners`, doubleWins, 0);
 
   console.log(failures === 0 ? "all checks passed" : `${failures} check(s) failed`);
   process.exit(failures === 0 ? 0 : 1);

@@ -22,6 +22,9 @@ export type Store = {
  * Inbox index entries are grouped 1000 seqs to a bucket, so a caught-up reader
  * lists only its sender's newest bucket, not that sender's whole history.
  * Blobs list has no start-after, so buckets are what bound a read.
+ * Cost per inbox read: one directory listing per root, plus one list per
+ * bucket at or after the caller's head for that root, run concurrently. A
+ * first read with no ?after= therefore lists every bucket of every sender.
  */
 const INBOX_BUCKET = 1000;
 
@@ -32,8 +35,12 @@ export type RelayDeps = {
 };
 
 const PID = "[a-z2-7]{16}";
-// 15 digits keeps every routable seq inside Number.MAX_SAFE_INTEGER.
-const LOG_ROUTE = new RegExp(`^/log/(${PID})/(0|[1-9][0-9]{0,14})$`);
+// 15 digits keeps every seq inside Number.MAX_SAFE_INTEGER. Routes and the
+// inbox's ?after= share this grammar, so neither can feed the other a seq the
+// bucket math was not built for.
+const SEQ = "0|[1-9][0-9]{0,14}";
+const LOG_ROUTE = new RegExp(`^/log/(${PID})/(${SEQ})$`);
+const AFTER_SEQ = new RegExp(`^(${SEQ})$`);
 const INBOX_ROUTE = new RegExp(`^/inbox/(${PID})$`);
 
 const pad = (n: number, width: number) => String(n).padStart(width, "0");
@@ -119,8 +126,9 @@ async function authorize(req: Request, url: URL, { store, roots, now }: RelayDep
   const auth = verifyRequest(req.headers.get("authorization"), target, roots, now());
   if (!auth.ok) return refuse(401, "unauthorized");
   // Hash the nonce so a caller-chosen string never becomes a raw storage key.
-  // The minute bucket lets a future sweep drop whole buckets older than the
-  // skew window; until that sweep exists, one tiny blob per read accumulates.
+  // The minute bucket lets a future sweep drop whole buckets. A ts signed at
+  // M:59 stays valid until M+5:59, so the sweep must keep the last skew window
+  // plus one minute. Until that sweep exists, one tiny blob per read accumulates.
   const minute = auth.at.toISOString().slice(0, 16);
   const nonceKey = `nonce/${auth.pid}/${minute}/${sodium.to_hex(sodium.crypto_generichash(16, auth.nonce))}`;
   if (!(await store.createOnly(nonceKey, new Uint8Array()))) return refuse(401, "replayed");
@@ -132,12 +140,12 @@ async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps:
   if (caller instanceof Response) return caller;
   // One answer for "absent", "not yours" and "sender since removed from the
   // allowlist", so no root can probe another root's log length.
-  const notFound = refuse(404, "not_found");
+  const notFound = () => refuse(404, "not_found");
   const wire = await deps.store.get(logKey(from, seq));
-  if (wire === null) return notFound;
+  if (wire === null) return notFound();
   const outer = verifyOuter(wire, deps.roots);
-  if (!outer.ok) return outer.error === "unknown_sender" ? notFound : refuse(500, "stored_envelope_invalid");
-  if (caller !== outer.header.from && caller !== outer.header.to) return notFound;
+  if (!outer.ok) return outer.error === "unknown_sender" ? notFound() : refuse(500, "stored_envelope_invalid");
+  if (caller !== outer.header.from && caller !== outer.header.to) return notFound();
   return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });
 }
 
@@ -166,7 +174,7 @@ function parseAfter(raw: string | null): ReadonlyMap<string, number> {
   const pairs = (raw ?? "")
     .split(",")
     .map((part) => part.split(":"))
-    .filter((pair): pair is [string, string] => pair.length === 2 && /^\d+$/.test(pair[1] ?? ""))
+    .filter((pair): pair is [string, string] => pair.length === 2 && AFTER_SEQ.test(pair[1] ?? ""))
     .map(([pid, seq]) => [pid, Number(seq)] as const);
   return new Map(pairs);
 }
