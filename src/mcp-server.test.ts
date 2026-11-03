@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ClientDeps } from "./client.ts";
+import { issueCert } from "./cert.ts";
+import { send } from "./client.ts";
 import { addContact } from "./home.ts";
+import { generateIdentity } from "./identity.ts";
 import { createMailboxServer } from "./mcp-server.ts";
 import { world } from "./test-world.ts";
 
@@ -86,6 +89,15 @@ test("a send addressed by pid reports the recipient by name", async () => {
   const { alice, bob } = await world();
   const sent = await call(await connect(alice.deps), "mailbox_send", { to: bob.id.pid, text: "hi" });
   assert.match(sent, /^Sent to Bob\b/);
+});
+
+test("mail from someone's agent says so, distinct from the person themselves", async () => {
+  const { alice, bob } = await world();
+  const daemonKey = generateIdentity();
+  const cert = issueCert(alice.id, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: new Date() });
+  await send({ ...alice.deps, agent: { signSec: daemonKey.signSec, cert } }, { to: "Bob", tag: "reply", text: "answered by my agent" });
+  const received = await call(await connect(bob.deps), "mailbox_receive", {});
+  assert.match(received, /UNTRUSTED message from Alice's agent "daemon"/);
 });
 
 test("a send that fails to reach the relay says it is queued, not lost", async () => {

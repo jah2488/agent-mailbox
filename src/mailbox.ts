@@ -1,4 +1,4 @@
-import { hashOf, type Body, type Hash, type Header, type Opened, type SenderChain } from "./envelope.ts";
+import { hashOf, type Body, type Hash, type Header, type Opened, type SenderChain, type Via } from "./envelope.ts";
 import type { Pid } from "./identity.ts";
 
 // Pure state transitions for one person's mailbox. Everything here is plain
@@ -15,6 +15,8 @@ export type Inbound = {
   readonly consumed: boolean;
   /** My clock when it arrived. Ordering uses this, never the sender's ts, which can be skewed. */
   readonly receivedAt: string;
+  /** Whether the person's own session sent it, or an agent acting for them. */
+  readonly via: Via;
 };
 
 export type Outbound = {
@@ -77,8 +79,8 @@ export function pendingDelivery(state: MailboxState): readonly Outbound[] {
 }
 
 export function recordReceived(state: MailboxState, opened: Opened, receivedAt: string): MailboxState {
-  const { header, body, hash, chain } = opened;
-  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt };
+  const { header, body, hash, chain, via } = opened;
+  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt, via };
   return { ...state, chains: { ...state.chains, [header.from]: chain }, inbox: [...state.inbox, inbound] };
 }
 

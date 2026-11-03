@@ -11,6 +11,8 @@ import sodium from "./sodium.ts";
 const CERT_DOMAIN = "agent-mailbox/v1/cert\n";
 const DEFAULT_TTL_DAYS = 30;
 const SKEW_MS = 5 * 60_000;
+// Receivers print this outside the untrusted frame, so it is a slug, never prose.
+const AGENT_NAME = /^[a-z0-9-]{1,24}$/;
 
 export type CertBody = {
   readonly v: 1;
@@ -48,6 +50,7 @@ export function verifyCert(
   now: Date,
 ): { readonly ok: true; readonly agentSignPub: Uint8Array; readonly name: string } | { readonly ok: false; readonly error: string } {
   if (cert.c.person !== root.pid) return { ok: false, error: "cert is for a different person" };
+  if (!AGENT_NAME.test(cert.c.name)) return { ok: false, error: "agent name must be 1-24 of a-z 0-9 -" };
   try {
     if (!sodium.crypto_sign_verify_detached(unb64(cert.s), signedBytes(cert.c), root.signPub)) return { ok: false, error: "bad cert signature" };
   } catch {

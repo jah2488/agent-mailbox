@@ -1,4 +1,5 @@
 import type { Json } from "./canonical.ts";
+import type { SignedCert } from "./cert.ts";
 import { open, seal, type Body } from "./envelope.ts";
 import { readHome, withLock, writeState, type Home } from "./home.ts";
 import type { Identity, Pid } from "./identity.ts";
@@ -34,6 +35,8 @@ export type ClientDeps = {
   readonly now: () => Date;
   /** Per relay request. Keeps every lock hold well under the lock's stale age. Default 10 s. */
   readonly timeoutMs?: number;
+  /** When set, sends are signed by this certified agent key rather than the root (the daemon's path). */
+  readonly agent?: { readonly signSec: Uint8Array; readonly cert: SignedCert };
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -113,7 +116,7 @@ export async function send(deps: ClientDeps, message: Outgoing): Promise<SendRes
       ...(message.text === undefined ? {} : { prose: message.text }),
     };
     const { seq, prev } = nextLink(home.state);
-    const sealed = seal({ from: identity, to: recipient, seq, prev, ts: now.toISOString(), body });
+    const sealed = seal({ from: identity, to: recipient, seq, prev, ts: now.toISOString(), body, ...(deps.agent === undefined ? {} : { agent: deps.agent }) });
     if (!sealed.ok) throw new Error(`could not seal message: ${sealed.error}`);
 
     // Persist before any network call: a crash after this point retries the
