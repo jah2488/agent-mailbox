@@ -21,9 +21,9 @@ test("nothing new means no notice at all, so quiet prompts stay quiet", () => {
 test("the notice names senders and the tool, and never includes message text", () => {
   assert.equal(
     inboxNotice({ waiting: 2, unread: 1, from: ["Ada", "Grace"] }),
-    "agent-mailbox: 3 unread messages (new from Ada, Grace). Read them with the mailbox_receive tool.",
+    "agent-mailbox: 3 unread messages (new from Ada, Grace). Read them with the mailbox_receive tool, then tell the user what arrived and what needs them.",
   );
-  assert.equal(inboxNotice({ waiting: 0, unread: 1, from: [] }), "agent-mailbox: 1 unread message. Read it with the mailbox_receive tool.");
+  assert.equal(inboxNotice({ waiting: 0, unread: 1, from: [] }), "agent-mailbox: 1 unread message. Read it with the mailbox_receive tool, then tell the user what arrived and what needs them.");
 });
 
 // ---- Update notice ----

@@ -22,7 +22,7 @@ Then, once per teammate:
 
 Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`.
 
-In Claude Code your agent now has `mailbox_send`, `mailbox_receive`, `mailbox_peers` and `mailbox_thread`. To approve every send by hand, add `"ask": ["mcp__agent-mailbox__mailbox_send"]` to the `permissions` in `~/.claude/settings.json`.
+In Claude Code your agent now has `mailbox_send`, `mailbox_receive`, `mailbox_peers` and `mailbox_thread`. The installer also adds an `ask` rule for `mailbox_send`, so Claude Code shows you every outgoing message for approval, in auto mode too. When mail arrives, your agent tells you what it is and what it needs from you: an ask gets a drafted reply for you to approve, and anything a teammate sends (a skill, a script, a config) is shown to you before anything is installed, run or changed.
 
 ## The daemon
 

@@ -27,14 +27,36 @@ function rebuild(settings: Settings, hooks: Settings, groups: readonly HookGroup
   return Object.keys(nextHooks).length > 0 ? { ...rest, hooks: nextHooks } : rest;
 }
 
+/** Every send then shows the user a permission prompt, in every mode but dontAsk, even if an allow rule also matches. */
+export const SEND_ASK_RULE = "mcp__agent-mailbox__mailbox_send";
+
+function askRulesOf(settings: Settings): { readonly permissions: Settings; readonly ask: readonly string[] } {
+  const permissions = settings["permissions"] ?? {};
+  if (!isObject(permissions)) throw new Error("settings.json has a permissions value that is not an object");
+  const ask = permissions["ask"] ?? [];
+  if (!Array.isArray(ask) || !ask.every((rule) => typeof rule === "string")) throw new Error("settings.json has a permissions.ask value that is not a list of rules");
+  return { permissions, ask: ask as string[] };
+}
+
+function withAskRules(settings: Settings, ask: readonly string[]): Settings {
+  const { permissions } = askRulesOf(settings);
+  const { ask: _old, ...otherRules } = permissions;
+  const nextPermissions = ask.length > 0 ? { ...otherRules, ask } : otherRules;
+  const { permissions: _permissions, ...rest } = settings;
+  return Object.keys(nextPermissions).length > 0 ? { ...rest, permissions: nextPermissions } : rest;
+}
+
 export function withoutHook(input: Json): Settings {
   const { settings, hooks, groups } = groupsOf(input);
+  askRulesOf(settings); // refuse a malformed permissions block before changing anything
   const kept = groups.map((g) => ({ ...g, hooks: g.hooks.filter((h) => !isInboxHook(h.command)) })).filter((g) => g.hooks.length > 0);
-  return rebuild(settings, hooks, kept);
+  const unhooked = rebuild(settings, hooks, kept);
+  return withAskRules(unhooked, askRulesOf(unhooked).ask.filter((rule) => rule !== SEND_ASK_RULE));
 }
 
 export function withHook(input: Json, command: string): Settings {
   const cleared = withoutHook(input);
   const { settings, hooks, groups } = groupsOf(cleared);
-  return rebuild(settings, hooks, [...groups, { hooks: [{ type: "command", command, timeout: 5 }] }]);
+  const hooked = rebuild(settings, hooks, [...groups, { hooks: [{ type: "command", command, timeout: 5 }] }]);
+  return withAskRules(hooked, [...askRulesOf(hooked).ask, SEND_ASK_RULE]);
 }

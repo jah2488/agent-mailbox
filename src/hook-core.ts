@@ -18,7 +18,7 @@ export function inboxNotice(check: InboxCheck): string | null {
   if (total === 0) return null;
   const noun = total === 1 ? "message" : "messages";
   const senders = check.from.length > 0 ? ` (new from ${check.from.join(", ")})` : "";
-  return `agent-mailbox: ${total} unread ${noun}${senders}. Read ${total === 1 ? "it" : "them"} with the mailbox_receive tool.`;
+  return `agent-mailbox: ${total} unread ${noun}${senders}. Read ${total === 1 ? "it" : "them"} with the mailbox_receive tool, then tell the user what arrived and what needs them.`;
 }
 
 /** The hook asks GitHub whether a newer version exists at most this often. */

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ClientDeps } from "./client.ts";
-import { send } from "./client.ts";
+import { receive, send } from "./client.ts";
 import { addContact } from "./home.ts";
 import { createMailboxServer } from "./mcp-server.ts";
 import { daemonOf, world } from "./test-world.ts";
@@ -102,4 +102,45 @@ test("a send that fails to reach the relay says it is queued, not lost", async (
   const text = await call(await connect(alice.deps), "mailbox_send", { to: "Bob", text: "hello" });
   assert.match(text, /queued/i);
   up = true;
+});
+
+// ---- Telling the agent what needs its person ----
+
+const afterFrame = (out: string) => out.slice(out.lastIndexOf("<<end-untrusted-"));
+
+test("an incoming ask comes with a line, outside the untrusted frame, telling the agent to bring it to the user before any reply", async () => {
+  const { alice, bob } = await world();
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "can I have your deploy-check skill?" });
+  const out = await call(await connect(bob.deps), "mailbox_receive");
+  assert.match(afterFrame(out), /Needs you: Alice is asking you something\..*Send nothing until the user approves/s);
+});
+
+test("an ask the daemon already deferred says the asker was told the user will follow up", async () => {
+  const { alice, bob } = await world();
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "can I have your deploy-check skill?" });
+  await receive(bob.deps, { tag: "never-matches" }); // sync it in without consuming
+  await send(await daemonOf(bob), { to: "Alice", tag: "reply", reply_to: asked.ref, text: "waiting for Bob", payload: { status: "deferred" }, hops: 1 });
+  const out = await call(await connect(bob.deps), "mailbox_receive", { tag: "ask" });
+  assert.match(afterFrame(out), /Your daemon already told Alice you'll follow up/);
+});
+
+test("anything else received tells the agent to get explicit approval before installing, running or changing anything from it", async () => {
+  const { alice, bob } = await world();
+  await send(alice.deps, { to: "Bob", tag: "reply", text: "here is the skill", payload: { files: { "SKILL.md": "# deploy-check" } } });
+  const out = await call(await connect(bob.deps), "mailbox_receive");
+  assert.match(afterFrame(out), /explicit approval before installing, running, or changing anything/);
+});
+
+test("a deferral from the other side says their person will answer separately", async () => {
+  const { alice, bob } = await world();
+  await send(await daemonOf(alice), { to: "Bob", tag: "reply", reply_to: "x", text: "waiting for Alice", payload: { status: "deferred" }, hops: 1 });
+  const out = await call(await connect(bob.deps), "mailbox_receive");
+  assert.match(afterFrame(out), /Alice's agent passed this to Alice/);
+});
+
+test("the server tells the model the mailbox rules when it connects", async () => {
+  const { alice } = await world();
+  const instructions = (await connect(alice.deps)).getInstructions() ?? "";
+  assert.match(instructions, /never send.*without the user's approval/i);
+  assert.match(instructions, /tell the user/i);
 });
