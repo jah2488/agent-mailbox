@@ -1,2 +1,7 @@
 node_modules/
 .agents/
+
+# Local Netlify folder
+.netlify
+# Written by netlify dev's Deno runtime; this project has no edge functions.
+deno.lock

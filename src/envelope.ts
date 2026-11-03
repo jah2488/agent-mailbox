@@ -105,14 +105,14 @@ export function hashOf(wire: Uint8Array): Hash {
   return ("b2:" + sodium.to_hex(sodium.crypto_generichash(32, wire))) as Hash;
 }
 
-function encodeSigned(header: Header, ciphertext: string, signer: Identity): Uint8Array {
+function encodeSigned(header: Header, ciphertext: string, signer: Identity): Uint8Array<ArrayBuffer> {
   const sig = sodium.crypto_sign_detached(signedBytes(header, ciphertext), signer.signSec);
   return utf8.encode(canonicalize({ c: ciphertext, h: header, s: b64(sig) }));
 }
 
 export function seal(
   input: SealInput,
-): { readonly ok: true; readonly wire: Uint8Array } | Failure<"too_large" | "invalid_payload" | "invalid_header"> {
+): { readonly ok: true; readonly wire: Uint8Array<ArrayBuffer> } | Failure<"too_large" | "invalid_payload" | "invalid_header"> {
   const hops = input.hops ?? 0;
   if (!isCount(input.seq) || !isHops(hops)) return fail("invalid_header");
   // The sender's pid rides inside the ciphertext. A sealed box is anonymous,
@@ -138,11 +138,16 @@ export function seal(
   return wire.length > MAX_ENVELOPE_BYTES ? fail("too_large") : { ok: true, wire };
 }
 
+export type OuterError = "too_large" | "malformed" | "non_canonical" | "unsupported" | "unknown_sender" | "bad_signature";
+
+export type VerifiedOuter = { readonly ok: true; readonly header: Header; readonly ciphertext: string; readonly hash: Hash };
+
 /**
- * Verifies and decrypts one envelope. Checks run cheapest and least trusting
- * first, so nothing from an unverified sender reaches decryption.
+ * Everything checkable without the recipient's key: size, canonical form,
+ * shape, roster membership and signature. The relay stops here; open goes on.
+ * Checks run cheapest and least trusting first.
  */
-export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenError> {
+export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>): VerifiedOuter | Failure<OuterError> {
   if (wire.length > MAX_ENVELOPE_BYTES) return fail("too_large");
 
   const parsed = parseCanonical(wire);
@@ -151,12 +156,19 @@ export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenE
   if (!shape.ok) return shape;
   const { header, ciphertext, signature } = shape;
 
-  const sender = ctx.roster.get(header.from);
+  const sender = roster.get(header.from);
   if (sender === undefined) return fail("unknown_sender");
   if (!verifySignature(header, ciphertext, signature, sender)) return fail("bad_signature");
+  return { ok: true, header, ciphertext, hash: hashOf(wire) };
+}
+
+/** Verifies and decrypts one envelope addressed to ctx.me. */
+export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenError> {
+  const outer = verifyOuter(wire, ctx.roster);
+  if (!outer.ok) return outer;
+  const { header, ciphertext, hash } = outer;
   if (header.to !== ctx.me.pid) return fail("wrong_recipient");
 
-  const hash = hashOf(wire);
   const known = ctx.chains.get(header.from)?.recent ?? [];
   const chainError = checkChain(header, hash, known);
   if (chainError !== null) return fail(chainError);
