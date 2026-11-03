@@ -251,7 +251,7 @@ async function auditVerify(io: CliIo): Promise<number> {
   if (home === null) return 1;
   const entries = await readAudit(io, home);
   if (entries === null) return 1;
-  io.out(`${entries.length} entries, chain intact, every one signed by your agent key.`);
+  io.out(`${entries.length} entries, chain intact, every one signed by the audit key your root certified.`);
   return 0;
 }
 
