@@ -52,7 +52,7 @@ test("after setup, one daemon tick answers an ask from the share folder, and the
   assert.deepEqual(messages.map((m) => [m.body.prose, m.via]), [["All green.", { kind: "agent", name: "daemon" }]]);
   io.lines.length = 0;
   assert.equal(await run(["audit", "verify"], io), 0, io.errors.join("\n"));
-  assert.match(io.lines.join("\n"), /3 entries/);
+  assert.match(io.lines.join("\n"), /4 entries/);
 });
 
 test("setup never stores the root key where the daemon reads keys, and a re-run renews the same agent key", async () => {
@@ -90,7 +90,7 @@ test("audit verify fails, naming the entry, once the log is edited", async () =>
   await writeFile(path, (await readFile(path, "utf8")).replace('"answered"', '"ignored"'));
 
   assert.equal(await run(["audit", "verify"], io), 1);
-  assert.match(io.errors.join("\n"), /entry 1: bad signature/);
+  assert.match(io.errors.join("\n"), /entry 2: bad signature/);
 });
 
 test("install writes a launchd plist into the mailbox home and only prints the commands that load it", async () => {

@@ -5,6 +5,7 @@ import { writeJson } from "./home.ts";
 import type { Identity, Peer } from "./identity.ts";
 import { DEFAULT_POLICY, policyParses, signPolicy, verifyPolicy, type SignedPolicy } from "./policy.ts";
 import { DEFAULT_RESPONDER, type ResponderConfig } from "./responder.ts";
+import sodium from "./sodium.ts";
 
 // The daemon's files in the mailbox home. agent.json and policy.json are
 // signed by the root, so anything that edits them on disk only gets them
@@ -79,14 +80,20 @@ export async function signPolicyFile(dir: string, root: Identity): Promise<{ rea
   return { ok: true, version };
 }
 
+/** A verified policy, with the hash every decision records so a later reader knows exactly which rules applied. */
+export type LoadedPolicy = { readonly ok: true; readonly cedar: string; readonly version: number; readonly hash: string } | { readonly ok: false; readonly error: string };
+
+const policyHash = (cedar: string) => "b2:" + sodium.to_hex(sodium.crypto_generichash(32, new TextEncoder().encode(cedar)));
+
 /** The verified policy text, raising the floor when a newer version appears. */
-export async function loadPolicy(dir: string, root: Peer): Promise<{ readonly ok: true; readonly cedar: string; readonly version: number } | { readonly ok: false; readonly error: string }> {
+export async function loadPolicy(dir: string, root: Peer): Promise<LoadedPolicy> {
   const signed = await readSigned(dir);
   if (signed === null) return { ok: false, error: "no signed policy; run: mailbox policy sign" };
   const floor = await floorOf(dir);
   const verified = verifyPolicy(signed, root, floor);
-  if (verified.ok && verified.version > floor) await writeFile(join(dir, POLICY_FLOOR), `${verified.version}\n`, { mode: 0o600 });
-  return verified;
+  if (!verified.ok) return verified;
+  if (verified.version > floor) await writeFile(join(dir, POLICY_FLOOR), `${verified.version}\n`, { mode: 0o600 });
+  return { ...verified, hash: policyHash(verified.cedar) };
 }
 
 /** The responder command: responder.json when present, otherwise the locked-down `claude -p`. */

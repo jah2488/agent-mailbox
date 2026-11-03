@@ -7,7 +7,7 @@ import { certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.t
 import type { CliIo } from "./cli.ts";
 import type { ClientDeps } from "./client.ts";
 import { initDaemonFiles, loadPolicy, readCert, readResponder, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
-import { runDaemon, tick, type DaemonDeps } from "./daemon.ts";
+import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
 import { runResponder } from "./responder.ts";
@@ -124,7 +124,7 @@ async function runOnce(io: CliIo, forever: boolean): Promise<number> {
   const deps = daemonDeps(io, home, loaded, since, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
   await deps.audit({ kind: "started", data: { agent: loaded.name, mode: forever ? "run" : "once" } });
   if (forever) await runDaemon(deps, { intervalMs: INTERVAL_MS, signal: io.stop, log: io.err });
-  else await tick(deps, new Set());
+  else await tick(deps, fresh);
   await deps.audit({ kind: "stopped", data: {} });
   return 0;
 }
@@ -247,17 +247,20 @@ async function review(io: CliIo): Promise<number> {
   if (home === null) return 1;
   const entries = await readAudit(io, home);
   if (entries === null) return 1;
-  const needs = entries.filter((e) => e.kind === "deferred" || e.kind === "error" || (e.kind === "answered" && (e.data as { flagged?: boolean }).flagged === true));
+  const needs = entries.filter((e) => {
+    const data = e.data as { status?: string; flagged?: boolean };
+    return e.kind === "error" || (e.kind === "reply_sent" && (data.status === "deferred" || data.flagged === true));
+  });
   if (needs.length === 0) {
     io.out("Nothing needs you.");
     return 0;
   }
   for (const entry of needs) {
-    const data = entry.data as { ref?: string; from?: string; reason?: string; error?: string };
+    const data = entry.data as { ref?: string; from?: string; status?: string; reason?: string; error?: string };
     const ask = home.state.inbox.find((m) => m.from === data.from && m.body.ref === data.ref);
     const who = home.contacts.get(data.from as Pid)?.name ?? data.from;
-    const why = entry.kind === "answered" ? "answered from flagged files" : (data.reason ?? data.error ?? "");
-    io.out(`${entry.ts.slice(0, 16)}  ${entry.kind}  ${who}  ref ${data.ref}  (${why})`);
+    const why = data.status === "answered" ? "answered from flagged files" : (data.reason ?? data.error ?? "");
+    io.out(`${entry.ts.slice(0, 16)}  ${data.status ?? entry.kind}  ${who}  ref ${data.ref}  (${why})`);
     if (ask?.body.prose !== undefined) io.out(`    asked: ${ask.body.prose}`);
   }
   io.out("To answer one yourself, reply in Claude Code with mailbox_send and that ref as reply_to.");
