@@ -59,6 +59,7 @@ const OUTER_STATUS: Readonly<Record<OuterError, number>> = {
   non_canonical: 400,
   unsupported: 400,
   unknown_sender: 403,
+  bad_cert: 401,
   bad_signature: 401,
 };
 
@@ -80,13 +81,13 @@ export async function handle(req: Request, deps: RelayDeps): Promise<Response> {
   return refuse(404, "not_found");
 }
 
-async function putEnvelope(from: Pid, seq: number, req: Request, { store, roots }: RelayDeps): Promise<Response> {
+async function putEnvelope(from: Pid, seq: number, req: Request, { store, roots, now }: RelayDeps): Promise<Response> {
   // netlify dev delivers an empty body when content-type is missing; naming
   // the header here beats a "malformed" that sends people hunting the envelope.
   const contentType = (req.headers.get("content-type") ?? "").split(";")[0]?.trim();
   if (contentType !== "application/json") return refuse(415, "content_type_must_be_application_json");
   const wire = new Uint8Array(await req.arrayBuffer());
-  const outer = verifyOuter(wire, roots);
+  const outer = verifyOuter(wire, roots, now());
   if (!outer.ok) return refuse(OUTER_STATUS[outer.error], outer.error);
   const { header } = outer;
   if (header.from !== from || header.seq !== seq) return refuse(400, "path_mismatch");
@@ -143,7 +144,7 @@ async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps:
   const notFound = () => refuse(404, "not_found");
   const wire = await deps.store.get(logKey(from, seq));
   if (wire === null) return notFound();
-  const outer = verifyOuter(wire, deps.roots);
+  const outer = verifyOuter(wire, deps.roots, deps.now());
   if (!outer.ok) return outer.error === "unknown_sender" ? notFound() : refuse(500, "stored_envelope_invalid");
   if (caller !== outer.header.from && caller !== outer.header.to) return notFound();
   return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });

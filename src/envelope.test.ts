@@ -16,6 +16,7 @@ import {
   type SenderChain,
 } from "./envelope.ts";
 import sodium from "./sodium.ts";
+import { issueCert, type SignedCert } from "./cert.ts";
 
 const alice = generateIdentity();
 const bob = generateIdentity();
@@ -219,4 +220,37 @@ test("canonicalize sorts keys, rejects non-integers, and ignores insertion order
   assert.equal(canonicalize({ a: 1, b: 2 }), canonicalize({ b: 2, a: 1 }));
   assert.throws(() => canonicalize({ n: 1.5 }));
   assert.throws(() => canonicalize({ n: Number.MAX_SAFE_INTEGER + 1 }));
+});
+
+// ---- Agent certs: the daemon signs with a key the root certified. ----
+
+const daemonKey = generateIdentity();
+const certNow = new Date();
+
+function sealAsAgent(cert: SignedCert, signer: Identity = daemonKey): Uint8Array {
+  const result = seal({ from: alice, to: toPeer(bob), seq: 0, prev: null, ts: certNow.toISOString(), body, agent: { signSec: signer.signSec, cert } });
+  assert.ok(result.ok);
+  return result.wire;
+}
+
+test("mail signed by a certified agent opens and says which agent sent it", () => {
+  const cert = issueCert(alice, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: certNow });
+  const opened = openOk(sealAsAgent(cert), bobContext());
+  assert.deepEqual(opened.via, { kind: "agent", name: "daemon" });
+});
+
+test("mail signed by the root itself opens as the owner", () => {
+  assert.deepEqual(openOk(sealFromAlice(0, null), bobContext()).via, { kind: "owner" });
+});
+
+test("an expired cert or another person's cert is refused", () => {
+  const stale = issueCert(alice, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: new Date(certNow.getTime() - 40 * 86_400_000) });
+  expectError(sealAsAgent(stale), bobContext(), "bad_cert");
+  const malloryCert = issueCert(mallory, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: certNow });
+  expectError(sealAsAgent(malloryCert), bobContext(), "bad_cert");
+});
+
+test("a valid cert does not cover a signature from a different key", () => {
+  const cert = issueCert(alice, { agentSignPub: daemonKey.signPub, name: "daemon", device: "laptop", now: certNow });
+  expectError(sealAsAgent(cert, mallory), bobContext(), "bad_signature");
 });

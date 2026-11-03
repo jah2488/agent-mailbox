@@ -1,4 +1,5 @@
 import { canonicalize, type Json } from "./canonical.ts";
+import { verifyCert, type SignedCert } from "./cert.ts";
 import type { Identity, Peer, Pid } from "./identity.ts";
 import sodium from "./sodium.ts";
 
@@ -28,7 +29,12 @@ export type Header = {
   readonly ts: string;
   readonly hops: number;
   readonly authored_by: "agent";
+  /** Present when an agent key signed this envelope on the person's behalf; absent when the root key did. */
+  readonly cert?: SignedCert;
 };
+
+/** Who signed: the person's own root key (their interactive sessions), or an agent it certified (the daemon). */
+export type Via = { readonly kind: "owner" } | { readonly kind: "agent"; readonly name: string };
 
 export type Body = {
   readonly tag: string;
@@ -47,9 +53,12 @@ export type OpenContext = {
   readonly me: Identity;
   readonly roster: ReadonlyMap<Pid, Peer>;
   readonly chains: ReadonlyMap<Pid, SenderChain>;
+  /** For cert expiry. Defaults to the current time. */
+  readonly now?: Date;
 };
 
 export type OpenError =
+  | "bad_cert"
   | "too_large"
   | "malformed"
   | "non_canonical"
@@ -72,6 +81,7 @@ export type Opened = {
   readonly hash: Hash;
   /** The caller's new chain for this sender; open never mutates its context. */
   readonly chain: SenderChain;
+  readonly via: Via;
 };
 
 type Failure<E> = { readonly ok: false; readonly error: E };
@@ -84,6 +94,8 @@ export type SealInput = {
   readonly ts: string;
   readonly hops?: number;
   readonly body: Body;
+  /** Sign with a certified agent key instead of the root. The root stays offline from the daemon's signing path. */
+  readonly agent?: { readonly signSec: Uint8Array; readonly cert: SignedCert };
 };
 
 const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -105,8 +117,8 @@ export function hashOf(wire: Uint8Array): Hash {
   return ("b2:" + sodium.to_hex(sodium.crypto_generichash(32, wire))) as Hash;
 }
 
-function encodeSigned(header: Header, ciphertext: string, signer: Identity): Uint8Array<ArrayBuffer> {
-  const sig = sodium.crypto_sign_detached(signedBytes(header, ciphertext), signer.signSec);
+function encodeSigned(header: Header, ciphertext: string, signSec: Uint8Array): Uint8Array<ArrayBuffer> {
+  const sig = sodium.crypto_sign_detached(signedBytes(header, ciphertext), signSec);
   return utf8.encode(canonicalize({ c: ciphertext, h: header, s: b64(sig) }));
 }
 
@@ -133,21 +145,22 @@ export function seal(
     ts: input.ts,
     hops,
     authored_by: "agent",
+    ...(input.agent === undefined ? {} : { cert: input.agent.cert }),
   };
-  const wire = encodeSigned(header, ciphertext, input.from);
+  const wire = encodeSigned(header, ciphertext, input.agent?.signSec ?? input.from.signSec);
   return wire.length > MAX_ENVELOPE_BYTES ? fail("too_large") : { ok: true, wire };
 }
 
-export type OuterError = "too_large" | "malformed" | "non_canonical" | "unsupported" | "unknown_sender" | "bad_signature";
+export type OuterError = "too_large" | "malformed" | "non_canonical" | "unsupported" | "unknown_sender" | "bad_cert" | "bad_signature";
 
-export type VerifiedOuter = { readonly ok: true; readonly header: Header; readonly ciphertext: string; readonly hash: Hash };
+export type VerifiedOuter = { readonly ok: true; readonly header: Header; readonly ciphertext: string; readonly hash: Hash; readonly via: Via };
 
 /**
  * Everything checkable without the recipient's key: size, canonical form,
- * shape, roster membership and signature. The relay stops here; open goes on.
- * Checks run cheapest and least trusting first.
+ * shape, roster membership, cert chain and signature. The relay stops here;
+ * open goes on. Checks run cheapest and least trusting first.
  */
-export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>): VerifiedOuter | Failure<OuterError> {
+export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>, now: Date = new Date()): VerifiedOuter | Failure<OuterError> {
   if (wire.length > MAX_ENVELOPE_BYTES) return fail("too_large");
 
   const parsed = parseCanonical(wire);
@@ -158,15 +171,24 @@ export function verifyOuter(wire: Uint8Array, roster: ReadonlyMap<Pid, Peer>): V
 
   const sender = roster.get(header.from);
   if (sender === undefined) return fail("unknown_sender");
-  if (!verifySignature(header, ciphertext, signature, sender)) return fail("bad_signature");
-  return { ok: true, header, ciphertext, hash: hashOf(wire) };
+  // With a cert, the root vouches for an agent key and that key must have signed.
+  let signer = sender.signPub;
+  let via: Via = { kind: "owner" };
+  if (header.cert !== undefined) {
+    const cert = verifyCert(header.cert, sender, now);
+    if (!cert.ok) return fail("bad_cert");
+    signer = cert.agentSignPub;
+    via = { kind: "agent", name: cert.name };
+  }
+  if (!verifySignature(header, ciphertext, signature, signer)) return fail("bad_signature");
+  return { ok: true, header, ciphertext, hash: hashOf(wire), via };
 }
 
 /** Verifies and decrypts one envelope addressed to ctx.me. */
 export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenError> {
-  const outer = verifyOuter(wire, ctx.roster);
+  const outer = verifyOuter(wire, ctx.roster, ctx.now);
   if (!outer.ok) return outer;
-  const { header, ciphertext, hash } = outer;
+  const { header, ciphertext, hash, via } = outer;
   if (header.to !== ctx.me.pid) return fail("wrong_recipient");
 
   const known = ctx.chains.get(header.from)?.recent ?? [];
@@ -178,7 +200,7 @@ export function open(wire: Uint8Array, ctx: OpenContext): Opened | Failure<OpenE
   if (body.from !== header.from) return fail("sender_mismatch");
 
   const recent = [...known, { seq: header.seq, hash }].slice(-RECENT_WINDOW);
-  return { ok: true, header, body: body.body, hash, chain: { recent } };
+  return { ok: true, header, body: body.body, hash, chain: { recent }, via };
 }
 
 function parseCanonical(wire: Uint8Array): { readonly ok: true; readonly value: unknown } | Failure<"malformed" | "non_canonical"> {
@@ -212,7 +234,8 @@ function readEnvelope(
   if (!isRecord(value) || !hasExactKeys(value, ["c", "h", "s"])) return fail("malformed");
   const { c, h, s } = value;
   if (typeof c !== "string" || typeof s !== "string" || !isRecord(h)) return fail("malformed");
-  if (!hasExactKeys(h, ["v", "from", "to", "seq", "prev", "ts", "hops", "authored_by"])) return fail("malformed");
+  if (!hasExactKeys(h, ["v", "from", "to", "seq", "prev", "ts", "hops", "authored_by"], ["cert"])) return fail("malformed");
+  if (h["cert"] !== undefined && !isCertShape(h["cert"])) return fail("malformed");
   // v0 has no root-signed approval, so a human claim cannot be verified yet.
   if (h["v"] !== 1 || h["authored_by"] !== "agent") return fail("unsupported");
   const wellFormed =
@@ -225,9 +248,20 @@ function readEnvelope(
   return wellFormed ? { ok: true, header: h as unknown as Header, ciphertext: c, signature: s } : fail("malformed");
 }
 
-function verifySignature(header: Header, ciphertext: string, signature: string, sender: Peer): boolean {
+function isCertShape(value: unknown): value is SignedCert {
+  if (!isRecord(value) || !hasExactKeys(value, ["c", "s"]) || typeof value["s"] !== "string") return false;
+  const c = value["c"];
+  return (
+    isRecord(c) &&
+    hasExactKeys(c, ["v", "person", "agent_sign_pub", "name", "device", "issued", "expires"]) &&
+    c["v"] === 1 &&
+    ["person", "agent_sign_pub", "name", "device", "issued", "expires"].every((k) => typeof c[k] === "string")
+  );
+}
+
+function verifySignature(header: Header, ciphertext: string, signature: string, signerPub: Uint8Array): boolean {
   try {
-    return sodium.crypto_sign_verify_detached(unb64(signature), signedBytes(header, ciphertext), sender.signPub);
+    return sodium.crypto_sign_verify_detached(unb64(signature), signedBytes(header, ciphertext), signerPub);
   } catch {
     return false;
   }
