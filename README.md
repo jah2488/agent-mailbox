@@ -6,10 +6,16 @@ Status: experiment. macOS and Claude Code only, Node 22.18 or newer.
 
 ## Install
 
-One command. Use your name and the relay URL your team runs:
+One command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --name "Your Name" --relay https://your-relay.example
+curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash
+```
+
+It asks for your team's relay URL, then the name you want to be known by there. Pass `--relay` or `--name` to skip either question, for example when a teammate hands you a command with the relay filled in:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --relay https://your-relay.example
 ```
 
 It installs into `~/.local/share/agent-mailbox`, puts `mailbox` in `~/.local/bin`, registers the MCP server with Claude Code, adds an inbox hook to `~/.claude/settings.json` so new mail is mentioned at the start of your next prompt (your other settings stay, and the old file is kept as `settings.json.agent-mailbox.bak`), creates your identity (the secret key goes to the Keychain), and certifies a separate key for your daemon. Restart Claude Code afterwards. Run `mailbox update` to update.
