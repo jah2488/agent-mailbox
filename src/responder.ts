@@ -78,6 +78,9 @@ export function parseResponderOutput(stdout: string): ResponderResult {
   return { kind: "defer", reason: "responder output had neither a single answer nor a defer" };
 }
 
+// A runaway responder must not grow the daemon's memory without bound.
+const MAX_STDOUT_CHARS = 1024 * 1024;
+
 /** Runs the responder in an empty temp dir with the prompt on stdin. Never throws: every failure is a defer. */
 export async function runResponder(config: ResponderConfig, prompt: string, options: { readonly timeoutMs?: number } = {}): Promise<ResponderResult> {
   const [command, ...args] = config.command;
@@ -91,7 +94,14 @@ export async function runResponder(config: ResponderConfig, prompt: string, opti
         child.kill("SIGKILL");
         resolve({ kind: "defer", reason: "responder timed out" });
       }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        if (stdout.length > MAX_STDOUT_CHARS) {
+          clearTimeout(timer);
+          child.kill("SIGKILL");
+          resolve({ kind: "defer", reason: "responder output exceeded 1 MB" });
+        }
+      });
       child.on("error", () => {
         clearTimeout(timer);
         resolve({ kind: "defer", reason: "responder could not start" });

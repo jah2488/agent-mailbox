@@ -43,3 +43,8 @@ test("the default responder is claude -p with no tools and none of the owner's s
   assert.equal(argv[argv.indexOf("--tools") + 1], "");
   assert.equal(argv[argv.indexOf("--permission-prompts") + 1], "none");
 });
+
+test("a responder that floods stdout is cut off and deferred rather than buffered without limit", async () => {
+  const flood = fake("const chunk='x'.repeat(65536); let n=0; const go=()=>{ while(n<64){ n++; if(!process.stdout.write(chunk)) return process.stdout.once('drain', go); } }; go();");
+  assert.deepEqual(await runResponder(flood, "q"), { kind: "defer", reason: "responder output exceeded 1 MB" });
+});

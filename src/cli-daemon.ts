@@ -270,7 +270,8 @@ async function review(io: CliIo): Promise<number> {
     const who = home.contacts.get(data.from as Pid)?.name ?? data.from;
     const why = data.status === "answered" ? "answered from flagged files" : (data.reason ?? data.error ?? "");
     io.out(`${entry.ts.slice(0, 16)}  ${data.status ?? entry.kind}  ${who}  ref ${data.ref}  (${why})`);
-    if (ask?.body.prose !== undefined) io.out(`    asked: ${ask.body.prose}`);
+    // JSON-escaped on one line: a terminal agent reading this can't mistake the asker's words for ours.
+    if (ask?.body.prose !== undefined) io.out(`    untrusted text from ${who}: ${JSON.stringify(ask.body.prose.slice(0, 500))}`);
   }
   io.out("To answer one yourself, reply in Claude Code with mailbox_send and that ref as reply_to.");
   return 0;

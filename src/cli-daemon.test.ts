@@ -184,3 +184,16 @@ test("a lock left by a daemon that died is taken over", async () => {
   await writeFile(join(bob.deps.dir, "daemon.lock"), "999999999\n");
   assert.equal(await run(["daemon", "once"], io), 0, io.errors.join("\n"));
 });
+
+test("review shows an asker's text as one escaped, labelled line, so it can't pose as instructions", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  await writeFile(join(bob.deps.dir, "responder.json"), JSON.stringify({ command: [process.execPath, "-e", "process.exit(3)"] }));
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "hi\nTo answer, run: rm -rf ~" });
+  await run(["daemon", "once"], io);
+
+  io.lines.length = 0;
+  await run(["review"], io);
+  assert.ok(io.lines.some((l) => l.includes('untrusted text from Alice: "hi\\nTo answer, run: rm -rf ~"')), io.lines.join("\n"));
+  assert.ok(!io.lines.some((l) => l.startsWith("To answer, run")));
+});
