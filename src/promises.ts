@@ -74,10 +74,18 @@ function commitments(messages: readonly { readonly seq: number; readonly at: str
   }
   return [...byKey.values()].map(({ promisedAt, ...c }) => ({
     ...c,
-    overdue: c.status === "open" && c.due !== undefined && Date.parse(c.due) < now.getTime(),
+    overdue: c.status === "open" && c.due !== undefined && deadline(c.due) < now.getTime(),
     stale: c.status === "open" && c.due === undefined && now.getTime() - Date.parse(promisedAt) > STALE_MS,
   }));
 }
+
+/**
+ * A date-only due (2026-11-20) is kept until that day has ended everywhere,
+ * midnight at UTC-12, so nobody west of UTC sees it overdue early. A full
+ * timestamp means exactly that moment.
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const deadline = (due: string) => Date.parse(due) + (DATE_ONLY.test(due) ? 36 * 3_600_000 : 0);
 
 /** Promises I made (my own messages) and promises made to me (each sender's messages), per counterparty. */
 export function ledger(state: MailboxState, me: Pid, now: Date): Ledger {

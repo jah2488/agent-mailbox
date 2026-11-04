@@ -63,10 +63,10 @@ async function cert(dir: string, now: Date): Promise<string | null> {
 async function promisesDue(dir: string, now: Date): Promise<string | null> {
   const cache = join(dir, "promise-check.json");
   if (!updateDue(await readDate(cache, "checkedAt"), now)) return null;
+  // Recorded first and always: reading all mail is the cost, and it's paid at most daily.
+  await writeFile(cache, JSON.stringify({ checkedAt: now.toISOString() }));
   const home = await readHome(dir);
-  const notice = promiseNoticeFor(ledger(home.state, home.me.pid, now));
-  if (notice !== null) await writeFile(cache, JSON.stringify({ checkedAt: now.toISOString() }));
-  return notice;
+  return promiseNoticeFor(ledger(home.state, home.me.pid, now));
 }
 
 async function main(): Promise<void> {

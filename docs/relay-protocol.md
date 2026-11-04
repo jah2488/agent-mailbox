@@ -20,8 +20,8 @@ Every relay has an Ed25519 key, kept as a 32-byte seed in `MAILBOX_RELAY_KEY`.
 
 `PUT /log/{pid}/{seq}` with `content-type: application/json` and the envelope as the body (256 KB at most).
 
-- **Who may write:** the relay accepts only envelopes whose sender and recipient are both on its allowlist, `MAILBOX_ROOTS`.
-- **Write-once:** a `(sender, seq)` is written once. The same bytes again is `200`; different bytes is `409 fork`.
+- **Who may write:** the relay accepts only envelopes whose sender and recipient are both members (see Membership).
+- **Write-once:** a `(sender, seq)` is written once. The same bytes again is `200`, and different bytes are refused with `409 fork`.
 - **Chain:** seq 0 has `prev: null`. Any later seq must name the hash of the stored seq before it (`409 gap` or `409 chain_mismatch` otherwise).
 - **Agent certs:** an envelope signed by an agent key must carry a cert its person's root signed, valid both when the envelope says it was sent and now.
 - **Success:** `201 {"from","seq"}`.
@@ -37,18 +37,18 @@ An unsigned read is `401`.
 
 ## Membership
 
-A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by vouch. Entries in `MAILBOX_ROOTS` with `"admin": true` are admins.
+A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by vouch. Entries in `MAILBOX_ROOTS` with `"admin": true` are admins. Founders are managed only by the operator, through `MAILBOX_ROOTS`.
 
 `POST /members` (`content-type: application/json`) takes a membership event signed by its actor's root:
 
 ```json
-{ "e": { "v": 1, "kind": "vouch | withdraw | remove", "relay": "<this relay's host>", "member": { "pid", "sign_pub", "box_pub" }, "by": "<actor pid>", "ts": "<ISO time>" }, "s": "<signature>" }
+{ "e": { "v": 1, "kind": "vouch | withdraw | remove", "relay": "<this relay's host>", "member": { "pid", "sign_pub", "box_pub" }, "by": "<actor pid>", "ts": "<exact ISO time, as toISOString writes it>" }, "s": "<signature>" }
 ```
 
 `s` signs `agent-mailbox/v1/membership\n` followed by the canonical JSON of `e`. The relay refuses an event unless:
 - the actor is a current member and the signature verifies against their key;
 - `relay` is this relay's host;
-- `ts` is within 5 minutes of the relay's clock.
+- `ts` is an exact ISO time within 5 minutes of the relay's clock.
 
 `MAILBOX_JOIN` sets who may vouch:
 
@@ -59,19 +59,32 @@ A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by v
 | `vouches:N` | any member | N different members |
 | `closed` | nobody | only founders are members |
 
-The rule set covers removal too:
-- **Withdraw:** a member may withdraw their own vouch.
-- **Remove:** an admin may remove anyone admitted by vouch.
-- **Replay:** events are stored write-once and replayed in time order, so a later vouch can re-admit someone. Someone a removed member vouched for stays admitted until they're removed too.
-- **No-op vouch:** a vouch for someone who's already a member is answered `200 {"admitted": true}` and stores nothing.
+The join rule governs new joins only: people already admitted stay when it changes, and an admin can remove anyone individually.
+
+The relay keeps one record per member, holding who currently vouches for them and whether an admin removed them:
+- **Withdraw:** a member takes back their own vouch.
+- **Remove:** an admin removes someone. The removal sticks: while it stands, only an admin's vouch is accepted for that person, and anyone else's is refused with `removed_by_admin`.
+- **Founders:** withdrawing or removing a founder is refused with `is_founder`.
+- **No-op vouch:** a vouch for someone who's already a member is answered `200 {"admitted": true}` and changes nothing.
+- **Cap:** a relay holds at most 1,000 member records; past that, new people are refused with `relay_full`.
 
 Responses:
-- **Recorded:** `201 {"member": "<pid>", "admitted": true | false}`.
-- **Refused:** `403 {"error": "not_a_member" | "admins_only" | "join_closed"}`, `401 bad_signature`, or `400 wrong_relay | stale | malformed | bad_member`.
+- **Applied:** `201 {"member": "<pid>", "admitted": true | false}`.
+- **Refused:**
+  - `403`: `not_a_member`, `admins_only`, `join_closed` or `removed_by_admin`;
+  - `401`: `bad_signature`;
+  - `400`: `wrong_relay`, `stale`, `malformed`, `bad_member` or `is_founder`;
+  - `409`: `relay_full`.
+
+## Errors on every route
+
+`405 method_not_allowed` for a method a route doesn't take, and `415 content_type_must_be_application_json` for a PUT or POST without that content type.
 
 ## What clients enforce
 
-`mailbox setup` and `mailbox peer add` check a relay before using it. Sync and send check again at most once a day. A relay is refused when it:
+`mailbox setup` and `mailbox peer add` check a relay before using it, and sync and send check again at most once a day.
+
+Refused when the relay:
 
 - doesn't answer the identity request with a valid description for its own host and the client's fresh challenge;
 - speaks a protocol other than `agent-mailbox/1`;

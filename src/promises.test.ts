@@ -61,3 +61,11 @@ test("a promise, fulfil or break must name the ask and the item; a promise's due
   assert.match(checkPromiseBody("promise", "ask-1", { item: "keys", due: "next week" }) ?? "", /due/);
   assert.equal(checkPromiseBody("ask", undefined, null), null, "other tags aren't promise messages");
 });
+
+test("a date-only due date is overdue only once that whole day has passed, wherever the user is", () => {
+  const dueToday = NOW.toISOString().slice(0, 10);
+  const l = ledger(state([], [outbound(0, promise("today", { due: dueToday })), outbound(1, promise("yesterday", { due: day(-1).slice(0, 10) }))]), me, NOW);
+  assert.deepEqual(l.made.map((p) => [p.item, p.overdue]), [["today", false], ["yesterday", false]]);
+  const l2 = ledger(state([], [outbound(0, promise("old", { due: day(-2).slice(0, 10) }))]), me, NOW);
+  assert.equal(l2.made[0]!.overdue, true);
+});

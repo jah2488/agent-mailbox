@@ -286,10 +286,17 @@ async function peerRemove(args: readonly string[], io: CliIo): Promise<number> {
     io.err(args[0] === undefined ? "usage: mailbox peer remove <name>" : `no contact named ${args[0]}`);
     return args[0] === undefined ? 2 : 1;
   }
+  // Spec 12: promises to someone you unpeer can't be kept, so they're broken out loud, before the contact is gone.
+  const open = ledger(home.state, home.me.pid, io.deps.now()).made.filter((p) => p.counterparty === them.pid && p.status === "open");
+  for (const p of open) {
+    await send(io.deps, { to: them.pid, tag: "break", reply_to: p.ref, text: `I can't keep this promise: we're no longer connected.`, payload: { item: p.item, reason: "unpeered" } });
+  }
+  if (open.length > 0) io.out(`Told ${them.name} you can't keep ${open.length} open promise${open.length === 1 ? "" : "s"}.`);
   await removeContact(io.deps.dir, them.pid);
   io.out(`Removed ${them.name} from your contacts.`);
   if (them.relay !== home.me.relay) return 0;
   const withdrawn = await membership(io.deps, "withdraw", them);
+  if (!withdrawn.ok && withdrawn.error === "is_founder") return 0; // founders are the operator's; there's no vouch to take back
   io.out(
     !withdrawn.ok
       ? `Couldn't withdraw your vouch on your relay (${withdrawn.error}).`

@@ -499,3 +499,18 @@ test("after an admin removes someone, a member's invite run says only an admin c
   await run(await inviteOf(stranger), bobs);
   assert.match(bobs.lines.join("\n"), /An admin removed Stranger/);
 });
+
+test("removing a peer breaks the open promises you made them, saying why", async () => {
+  const { alice, bob } = await world();
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "keys?" });
+  await send(bob.deps, { to: "Alice", tag: "promise", reply_to: asked.ref, text: "after launch", payload: { item: "prod keys" } });
+
+  const bobs = ioFor(bob);
+  assert.equal(await run(["peer", "remove", "Alice"], bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /Told Alice you can't keep 1 open promise/);
+  assert.doesNotMatch(bobs.lines.join("\n") + bobs.errors.join("\n"), /is_founder/);
+
+  const alices = ioFor(alice);
+  await run(["promises"], alices);
+  assert.match(alices.lines.join("\n"), /Bob: prod keys \(broken\); reason: unpeered/);
+});

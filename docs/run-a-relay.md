@@ -48,7 +48,7 @@ Choose how strict joining is with `MAILBOX_JOIN`:
 | `vouches:2` (or any N) | N different members must each run their invite |
 | `closed` | nobody: only the founders in `MAILBOX_ROOTS` |
 
-Taking someone out: whoever vouched runs `mailbox peer remove <name>` to withdraw their vouch, and an admin runs `mailbox relay remove <name>` to remove anyone. Every vouch, withdrawal and removal is signed and kept on the relay.
+Taking someone out: whoever vouched runs `mailbox peer remove <name>` to withdraw their vouch, and an admin runs `mailbox relay remove <name>` to remove someone in their contacts outright. An admin's removal sticks until an admin brings the person back. Changing `MAILBOX_JOIN` later affects new joins only. Every vouch, withdrawal and removal must be signed by a member; the relay keeps each member's current vouchers.
 
 ## 4. Deploy and check
 
