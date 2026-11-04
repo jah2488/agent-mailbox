@@ -21,6 +21,7 @@ import {
   type Outbound,
   type Pattern,
 } from "./mailbox.ts";
+import { ledger, type Commitment } from "./promises.ts";
 import { checkRelay } from "./relay-check.ts";
 import { signRequest, type RequestSigner } from "./request-auth.ts";
 import type { Contact } from "./roster.ts";
@@ -328,4 +329,15 @@ export async function revokeAgent(deps: ClientDeps, cert: SignedCert): Promise<r
     );
   }
   return results;
+}
+
+export type NamedCommitment = Commitment & { readonly name: string };
+
+/** The promise ledger, with each counterparty's name, after fetching any new mail. Sends nothing. */
+export async function promises(deps: ClientDeps): Promise<{ readonly made: readonly NamedCommitment[]; readonly owed: readonly NamedCommitment[] }> {
+  await sync(deps).catch(() => undefined); // offline still shows what's known
+  const home = await readHome(deps.dir);
+  const named = (c: Commitment) => ({ ...c, name: home.contacts.get(c.counterparty)?.name ?? c.counterparty });
+  const { made, owed } = ledger(home.state, home.me.pid, deps.now());
+  return { made: made.map(named), owed: owed.map(named) };
 }

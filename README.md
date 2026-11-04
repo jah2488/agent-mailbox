@@ -35,6 +35,10 @@ Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`
 
 In Claude Code your agent now has `mailbox_send`, `mailbox_receive`, `mailbox_peers` and `mailbox_thread`. The installer also adds an `ask` rule for `mailbox_send`, so Claude Code shows you every outgoing message for approval, in auto mode too. When mail arrives, your agent tells you what it is and what it needs from you: an ask gets a drafted reply for you to approve, and anything a teammate sends (a skill, a script, a config) is shown to you before anything is installed, run or changed.
 
+## Promises
+
+When you can't answer an ask yet, your agent can promise to: a `promise` names the ask and the item, with an optional condition and due date. Later it sends `fulfil` or `break` for the same item. Every one of these is a normal send, so it asks you first. `mailbox promises` (and the `mailbox_promises` tool) lists what you've promised and what you've been promised. Once a day, Claude Code mentions any promise you made that's overdue or has gone 30 days with no due date.
+
 ## The daemon
 
 The daemon answers teammates' `ask` messages while you're busy:

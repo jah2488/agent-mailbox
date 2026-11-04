@@ -1,3 +1,4 @@
+import type { Ledger } from "./promises.ts";
 import type { InboxCheck } from "./client.ts";
 
 /** The hook runs on every prompt; it checks the relays at most this often. */
@@ -57,4 +58,18 @@ export function certNotice(expires: string | null, daemonOn: boolean, now: Date)
   if (left <= 0) return `agent-mailbox: the user's daemon certificate has expired, so their daemon has stopped answering. ${renew}`;
   const days = Math.floor(left / 86_400_000);
   return `agent-mailbox: the user's daemon certificate expires in ${days === 0 ? "less than a day" : `${days} day${days === 1 ? "" : "s"}`}. ${renew}`;
+}
+
+/** Spec 9: overdue promises surface to the promiser's owner, so only promises the user made count. */
+export function promiseNotice(overdue: number, stale: number): string | null {
+  if (overdue + stale === 0) return null;
+  const parts = [
+    ...(overdue > 0 ? [`${overdue} overdue promise${overdue === 1 ? "" : "s"}`] : []),
+    ...(stale > 0 ? [`${stale} with no due date for 30+ days`] : []),
+  ];
+  return `agent-mailbox: the user has ${parts.join(" and ")} to teammates. Tell the user; mailbox_promises lists them.`;
+}
+
+export function promiseNoticeFor(ledger: Ledger): string | null {
+  return promiseNotice(ledger.made.filter((p) => p.overdue).length, ledger.made.filter((p) => p.stale).length);
 }

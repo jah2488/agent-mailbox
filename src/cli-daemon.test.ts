@@ -409,3 +409,22 @@ test("daemon start says so when launchd loaded the daemon but it isn't running",
   assert.match(io.errors.join("\n"), /daemon\.log/);
   assert.ok(!io.lines.some((l) => /Daemon on/.test(l)));
 });
+
+// ---- Promises in the CLI ----
+
+test("mailbox promises and the status panel show promises on both sides", async () => {
+  const { alice, bob } = await world();
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "keys?" });
+  await send(bob.deps, { to: "Alice", tag: "promise", reply_to: asked.ref, text: "after launch", payload: { item: "prod keys", due: "2000-01-01" } });
+
+  const bobs = ioFor(bob);
+  assert.equal(await run(["promises"], bobs), 0);
+  assert.match(bobs.lines.join("\n"), /You promised[\s\S]*Alice: prod keys \(open, overdue, due 2000-01-01\)/);
+  bobs.lines.length = 0;
+  await run(["status"], bobs);
+  assert.match(bobs.lines.join("\n"), /Promises\s+1 you made \(1 overdue\), 0 to you/);
+
+  const alices = ioFor(alice);
+  await run(["promises"], alices);
+  assert.match(alices.lines.join("\n"), /Promised to you[\s\S]*Bob: prod keys/);
+});

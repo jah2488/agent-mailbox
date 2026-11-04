@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { certNotice, inboxNotice, shouldCheck, updateDue, updateNotice, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
+import { certNotice, inboxNotice, promiseNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
 
 const now = new Date("2026-11-02T12:00:00Z");
 
@@ -74,4 +74,18 @@ test("an expired cert says the daemon has stopped answering", () => {
 test("a cert near or past expiry says nothing when the daemon was never started, as for everyone right after setup", () => {
   assert.equal(certNotice(expiresIn(2 * DAY), false, now), null);
   assert.equal(certNotice(expiresIn(-DAY), false, now), null);
+});
+
+// ---- Promise notice ----
+
+test("overdue or long-forgotten promises the user made are mentioned; none, or only promises made to them, say nothing", () => {
+  assert.equal(promiseNotice(0, 0), null);
+  assert.equal(promiseNotice(2, 0), "agent-mailbox: the user has 2 overdue promises to teammates. Tell the user; mailbox_promises lists them.");
+  assert.equal(promiseNotice(1, 1), "agent-mailbox: the user has 1 overdue promise and 1 with no due date for 30+ days to teammates. Tell the user; mailbox_promises lists them.");
+});
+
+test("the promise notice counts only promises the user made, never promises made to them", () => {
+  const overdue = { counterparty: "x" as never, ref: "r", item: "i", status: "open" as const, overdue: true, stale: false };
+  assert.equal(promiseNoticeFor({ made: [], owed: [overdue] }), null);
+  assert.match(promiseNoticeFor({ made: [overdue], owed: [] }) ?? "", /1 overdue promise/);
 });

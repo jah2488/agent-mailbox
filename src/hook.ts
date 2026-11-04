@@ -10,7 +10,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkInbox } from "./client.ts";
 import { depsFromEnv, isDevCheckout } from "./config.ts";
-import { certNotice, inboxNotice, shouldCheck, updateDue, updateNotice } from "./hook-core.ts";
+import { certNotice, inboxNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice } from "./hook-core.ts";
+import { readHome } from "./home.ts";
+import { ledger } from "./promises.ts";
 
 const CHECK_TIMEOUT_MS = 1_500;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,12 +59,22 @@ async function cert(dir: string, now: Date): Promise<string | null> {
   return notice;
 }
 
+/** Once a day, from mail already here: promises the user made that are overdue or forgotten. */
+async function promisesDue(dir: string, now: Date): Promise<string | null> {
+  const cache = join(dir, "promise-check.json");
+  if (!updateDue(await readDate(cache, "checkedAt"), now)) return null;
+  const home = await readHome(dir);
+  const notice = promiseNoticeFor(ledger(home.state, home.me.pid, now));
+  if (notice !== null) await writeFile(cache, JSON.stringify({ checkedAt: now.toISOString() }));
+  return notice;
+}
+
 async function main(): Promise<void> {
   const deps = depsFromEnv();
   const now = deps.now();
   const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), CHECK_TIMEOUT_MS).unref());
   const settle = (p: Promise<string | null>) => Promise.race([p.catch(() => null), timeout]);
-  const notices = await Promise.all([settle(inbox(deps, now)), settle(update(deps.dir, now)), settle(cert(deps.dir, now))]);
+  const notices = await Promise.all([settle(inbox(deps, now)), settle(update(deps.dir, now)), settle(cert(deps.dir, now)), settle(promisesDue(deps.dir, now))]);
   for (const notice of notices) if (notice !== null) process.stdout.write(`${notice}\n`);
 }
 

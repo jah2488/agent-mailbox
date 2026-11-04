@@ -7,7 +7,8 @@ import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
 import { checkRelay, readPins } from "./relay-check.ts";
-import { send, sync, type ClientDeps } from "./client.ts";
+import { promises, send, sync, type ClientDeps, type NamedCommitment } from "./client.ts";
+import { ledger } from "./promises.ts";
 import { heardFrom } from "./mailbox.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
@@ -52,6 +53,7 @@ const USAGE = [
   "  peer add <invite>                    add a teammate from their invite",
   "  peers                                list contacts with fingerprints",
   "  sync                                 fetch new mail now",
+  "  promises                             what you've promised teammates, and what they've promised you",
   "  roots                                print the relay allowlist for you and your contacts",
   "  install                              print the Claude Code setup commands",
   "  hook install | remove                add or remove the inbox hook in ~/.claude/settings.json",
@@ -382,6 +384,27 @@ async function update(io: CliIo): Promise<number> {
   return 0;
 }
 
+/** Promises on both sides. Promised-to-you lines are the promiser's words, shown to the user as such. */
+async function promisesCommand(io: CliIo): Promise<number> {
+  if ((await homeOrExplain(io)) === null) return 1;
+  const { made, owed } = await promises(io.deps);
+  const s = styles(io.color);
+  if (made.length === 0 && owed.length === 0) {
+    io.out("No promises yet.");
+    return 0;
+  }
+  const line = (p: NamedCommitment) => {
+    const state = [p.status, ...(p.overdue ? ["overdue"] : []), ...(p.due === undefined ? [] : [`due ${p.due}`]), ...(p.stale ? ["no due date, 30+ days old"] : [])].join(", ");
+    return `  ${s.bold(p.name)}: ${p.item} (${p.overdue ? s.accent(state) : state})${p.condition === undefined ? "" : s.dim(`; condition: ${p.condition}`)}${p.reason === undefined ? "" : s.dim(`; reason: ${p.reason}`)}`;
+  };
+  for (const [heading, list] of [["You promised", made], ["Promised to you", owed]] as const) {
+    if (list.length === 0) continue;
+    io.out(s.bold(heading));
+    for (const p of list) io.out(line(p));
+  }
+  return 0;
+}
+
 /** The fastfetch-style block: who you are on which relay, what to share, and what's running. */
 async function status(io: CliIo): Promise<number> {
   const home = await readHome(io.deps.dir).catch(() => null);
@@ -389,6 +412,8 @@ async function status(io: CliIo): Promise<number> {
     io.err("not set up yet; run: mailbox setup");
     return 1;
   }
+  const ledgered = ledger(home.state, home.me.pid, io.deps.now());
+  const openMade = ledgered.made.filter((p) => p.status === "open");
   const heard = heardFrom(home.state);
   const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid).map((c) => (heard.has(c.pid) ? c.name : `${c.name} (waiting)`));
   const cert = await readCert(io.deps.dir);
@@ -412,6 +437,10 @@ async function status(io: CliIo): Promise<number> {
             : daysLeft <= 7
               ? `expires in ${daysLeft} days (mailbox daemon setup)`
               : `good until ${new Date(expires).toISOString().slice(0, 10)}`,
+    },
+    {
+      key: "Promises",
+      value: `${openMade.length} you made${openMade.some((p) => p.overdue) ? ` (${openMade.filter((p) => p.overdue).length} overdue)` : ""}, ${ledgered.owed.filter((p) => p.status === "open").length} to you`,
     },
     { key: "Inbox hook", value: hasHook(settings) ? "on" : "off (mailbox hook install)" },
     { key: "Sends", value: hasAskRule(settings) ? "ask you first" : "NOT checked with you (mailbox hook install)", strong: !hasAskRule(settings) },
@@ -454,6 +483,8 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return update(io);
     case "status":
       return status(io);
+    case "promises":
+      return promisesCommand(io);
     case "hook":
       return hookCommand(rest[0], io);
     case "uninstall":
