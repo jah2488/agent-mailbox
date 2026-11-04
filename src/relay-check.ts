@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { verifyRelayDescription, WELL_KNOWN_PATH } from "./relay-identity.ts";
@@ -17,18 +18,26 @@ const RECHECK_MS = 86_400_000;
 // No real pid: an honest relay refuses this read for lack of a signature, whoever it names.
 const UNSIGNED_PROBE = "/inbox/aaaaaaaaaaaaaaaa";
 
+/** The pinned relays. Missing is empty; unreadable throws, so a damaged file never means "trust whatever answers". */
 export async function readPins(dir: string): Promise<Pins> {
+  let text: string;
   try {
-    return JSON.parse(await readFile(join(dir, FILE), "utf8")) as Pins;
+    text = await readFile(join(dir, FILE), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  try {
+    return JSON.parse(text) as Pins;
   } catch {
-    return {};
+    throw new Error(`${join(dir, FILE)} is unreadable; fix it or delete it to pin your relays again`);
   }
 }
 
 async function writePin(dir: string, relay: string, pin: RelayPin): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 }); // setup checks the relay before the home exists
   const path = join(dir, FILE);
-  const tmp = `${path}.${process.pid}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify({ ...(await readPins(dir)), [relay]: pin }, null, 2) + "\n", { mode: 0o600 });
   await rename(tmp, path);
 }
@@ -56,7 +65,13 @@ export async function probeRelay(deps: Pick<Deps, "fetch" | "timeoutMs">, relay:
  * changes. claimed is the key an invite named for the relay; it must match too.
  */
 export async function checkRelay(deps: Deps, relay: string, claimed?: string): Promise<RelayCheck> {
-  const pin = (await readPins(deps.dir))[relay];
+  let pins: Pins;
+  try {
+    pins = await readPins(deps.dir);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const pin = pins[relay];
   const fresh = pin !== undefined && deps.now().getTime() - Date.parse(pin.checkedAt) < RECHECK_MS;
   if (fresh && (claimed === undefined || claimed === pin.key)) return { ok: true, relayKey: pin.key };
   const probed = await probeRelay(deps, relay);

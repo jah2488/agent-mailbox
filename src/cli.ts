@@ -197,12 +197,15 @@ async function whoami(io: CliIo): Promise<number> {
   return 0;
 }
 
+/** The key this machine pinned for a relay, if any. A damaged pin file reads as none here; sync is where it's refused. */
+const pinnedKey = async (io: CliIo, relay: string): Promise<string | undefined> => (await readPins(io.deps.dir).catch(() => ({}) as Record<string, undefined>))[relay]?.key;
+
 /** The exact command a teammate runs to add you: copied to the clipboard, or printed alone with --print. */
 async function invite(args: readonly string[], io: CliIo): Promise<number> {
   const { values } = parseArgs({ args: [...args], options: { print: { type: "boolean" } } });
   const home = await homeOrExplain(io);
   if (home === null) return 1;
-  const command = `mailbox peer add ${inviteToken(home.me, (await readPins(io.deps.dir))[home.me.relay]?.key)}`;
+  const command = `mailbox peer add ${inviteToken(home.me, await pinnedKey(io, home.me.relay))}`;
   if (values.print === true) {
     io.out(command);
     return 0;
@@ -491,7 +494,7 @@ async function status(io: CliIo): Promise<number> {
   const version = await io.exec("git", ["-C", io.repoRoot, "rev-parse", "--short", "HEAD"]);
   const facts: Fact[] = [
     { key: "Name", value: home.me.name, strong: true },
-    { key: "Relay", value: `${new URL(home.me.relay).host} ${(await readPins(io.deps.dir))[home.me.relay] === undefined ? "(not verified yet)" : "(verified)"}` },
+    { key: "Relay", value: `${new URL(home.me.relay).host} ${(await pinnedKey(io, home.me.relay)) === undefined ? "(not verified yet)" : "(verified)"}` },
     { key: "Fingerprint", value: fingerprintOf(home.me.signPub), strong: true },
     { key: "Contacts", value: others.length === 0 ? "none yet" : others.join(", ") },
     { key: "Daemon", value: (await daemonInstalled(io, home)) ? "on, and at every login" : "off (mailbox daemon start)" },

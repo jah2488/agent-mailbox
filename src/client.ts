@@ -195,13 +195,19 @@ async function listWaiting(
     .join(",");
   const path = `/inbox/${home.me.pid}${after ? `?after=${after}` : ""}`;
   const relays = [...new Set([...home.contacts.values()].map((c) => c.relay))];
+  // Checked one at a time: each check may rewrite relays.json, and parallel rewrites would lose pins.
+  const refused = new Map<string, string>();
+  if (checked) {
+    for (const relay of relays) {
+      const identity = await checkRelay(deps, relay);
+      if (!identity.ok) refused.set(relay, identity.error);
+    }
+  }
   return Promise.all(
     relays.map(async (relay) => {
       try {
-        if (checked) {
-          const identity = await checkRelay(deps, relay);
-          if (!identity.ok) return { relay, entries: [], error: `${relay}: ${identity.error}` };
-        }
+        const refusal = refused.get(relay);
+        if (refusal !== undefined) return { relay, entries: [], error: `${relay}: ${refusal}` };
         const res = await signedGet(deps, relay, path, signer);
         if (res.status !== 200) return { relay, entries: [], error: `${relay}: ${await describeFailure(res)}` };
         const entries = readEntries(await res.json().catch(() => null));

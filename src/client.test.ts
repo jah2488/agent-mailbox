@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { checkInbox, receive, revokeAgent, send, sync } from "./client.ts";
-import { readHome } from "./home.ts";
+import { addContact, readHome } from "./home.ts";
+import { generateIdentity, toPeer } from "./identity.ts";
+import { contact } from "./roster.ts";
 import { take, thread } from "./mailbox.ts";
 import { issueCert } from "./cert.ts";
 import { agentIdentity } from "./identity.ts";
@@ -267,4 +269,22 @@ test("a relay with a valid key that serves inbox reads without a signature is re
   });
   const synced = await sync(bob.deps);
   assert.match(synced.errors.join("\n"), /relay\.test: serves inbox reads without a signature/);
+});
+
+test("contacts on several relays get each relay pinned on the first sync, with no error", async () => {
+  const { bob } = await world();
+  // The test world answers every host with the same relay; each host still pins on its own.
+  for (const host of ["second.test", "third.test"]) await addContact(bob.deps.dir, contact(toPeer(generateIdentity()), host, `https://${host}`));
+  const synced = await sync(bob.deps);
+  assert.deepEqual(synced.errors, []);
+  const pins = JSON.parse(await readFile(join(bob.deps.dir, "relays.json"), "utf8")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(pins).sort(), ["https://relay.test", "https://second.test", "https://third.test"]);
+});
+
+test("a corrupt relays.json refuses relays instead of quietly trusting whatever answers", async () => {
+  const { bob } = await world();
+  await writeFile(join(bob.deps.dir, "relays.json"), "{ not json");
+  const synced = await sync(bob.deps);
+  assert.match(synced.errors.join("\n"), /relays\.json is unreadable/);
+  assert.equal(await readFile(join(bob.deps.dir, "relays.json"), "utf8"), "{ not json", "left for the user to fix");
 });
