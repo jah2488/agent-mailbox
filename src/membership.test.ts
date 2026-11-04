@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateIdentity, type Pid } from "./identity.ts";
-import { admitted, checkEvent, parseJoinRule, signEvent, type MembershipEvent } from "./membership.ts";
+import { applyEvent, checkEvent, isAdmitted, parseJoinRule, signEvent, type MemberRecord, type MembershipEvent } from "./membership.ts";
 import { rootEntry } from "./roots.ts";
 
 const founder = generateIdentity();
@@ -9,12 +9,21 @@ const admin = generateIdentity();
 const newcomer = generateIdentity();
 const other = generateIdentity();
 const HOST = "relay.example";
-const NOW = new Date("2026-11-10T12:00:00Z");
+const NOW = new Date("2026-11-10T12:00:00.000Z");
 const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000).toISOString();
 
-const vouch = (by: typeof founder, who = newcomer, ts = at(0)): MembershipEvent => ({ v: 1, kind: "vouch", relay: HOST, member: rootEntry(who), by: by.pid, ts });
-const withdraw = (by: typeof founder, ts: string): MembershipEvent => ({ v: 1, kind: "withdraw", relay: HOST, member: rootEntry(newcomer), by: by.pid, ts });
-const remove = (by: typeof founder, ts: string): MembershipEvent => ({ v: 1, kind: "remove", relay: HOST, member: rootEntry(newcomer), by: by.pid, ts });
+const event = (kind: MembershipEvent["kind"], by: typeof founder, who = newcomer, ts = at(0)): MembershipEvent => ({ v: 1, kind, relay: HOST, member: rootEntry(who), by: by.pid, ts });
+const vouch = (by: typeof founder, who = newcomer, ts = at(0)) => event("vouch", by, who, ts);
+
+/** Applies events in order, as the relay does one request at a time; a refused event leaves the record as it was. */
+function replay(events: readonly MembershipEvent[], admins: ReadonlySet<string> = new Set([admin.pid])): MemberRecord | undefined {
+  let record: MemberRecord | undefined;
+  for (const e of events) {
+    const applied = applyEvent(record, e, admins.has(e.by));
+    if (applied.ok) record = applied.record;
+  }
+  return record;
+}
 
 test("join rules parse, defaulting to any member", () => {
   assert.deepEqual(parseJoinRule(undefined), { kind: "any-member" });
@@ -26,18 +35,25 @@ test("join rules parse, defaulting to any member", () => {
 });
 
 test("one vouch admits under any-member; vouches:2 needs two different members", () => {
-  assert.deepEqual([...admitted([vouch(founder)], { kind: "any-member" }).keys()], [newcomer.pid]);
-  assert.deepEqual([...admitted([vouch(founder)], { kind: "vouches", count: 2 }).keys()], []);
-  assert.deepEqual([...admitted([vouch(founder), vouch(founder, newcomer, at(1))], { kind: "vouches", count: 2 }).keys()], [], "the same member twice is one vouch");
-  assert.deepEqual([...admitted([vouch(founder), vouch(admin, newcomer, at(1))], { kind: "vouches", count: 2 }).keys()], [newcomer.pid]);
+  assert.equal(isAdmitted(replay([vouch(founder)]), { kind: "any-member" }), true);
+  assert.equal(isAdmitted(replay([vouch(founder)]), { kind: "vouches", count: 2 }), false);
+  assert.equal(isAdmitted(replay([vouch(founder), vouch(founder)]), { kind: "vouches", count: 2 }), false, "the same member twice is one vouch");
+  assert.equal(isAdmitted(replay([vouch(founder), vouch(other)]), { kind: "vouches", count: 2 }), true);
+  assert.equal(isAdmitted(replay([vouch(founder)]), { kind: "closed" }), false);
 });
 
-test("a voucher withdrawing, or an admin removing, takes the member out; a later vouch brings them back", () => {
-  const rule = { kind: "any-member" } as const;
-  assert.equal(admitted([vouch(founder), withdraw(founder, at(1))], rule).size, 0);
-  assert.equal(admitted([vouch(founder), remove(admin, at(1))], rule).size, 0);
-  assert.equal(admitted([vouch(founder), remove(admin, at(1)), vouch(other, newcomer, at(2))], rule).size, 1);
-  assert.equal(admitted([withdraw(founder, at(1)), vouch(founder)], rule).size, 0, "events apply in time order, not listing order");
+test("a voucher withdrawing takes their vouch back; others' vouches still count", () => {
+  assert.equal(isAdmitted(replay([vouch(founder), event("withdraw", founder)]), { kind: "any-member" }), false);
+  assert.equal(isAdmitted(replay([vouch(founder), vouch(other), event("withdraw", founder)]), { kind: "any-member" }), true);
+});
+
+test("an admin's removal sticks: a member's later vouch is refused, an admin's re-admits", () => {
+  const removed = replay([vouch(founder), event("remove", admin)]);
+  assert.equal(isAdmitted(removed, { kind: "any-member" }), false);
+  assert.deepEqual(applyEvent(removed, vouch(other), false), { ok: false, status: 403, error: "removed_by_admin" });
+  const back = applyEvent(removed, vouch(admin), true);
+  assert.ok(back.ok);
+  assert.equal(isAdmitted(back.record, { kind: "any-member" }), true);
 });
 
 const ctx = (rule = parseJoinRule(undefined)!) => ({
@@ -45,24 +61,29 @@ const ctx = (rule = parseJoinRule(undefined)!) => ({
   now: NOW,
   rule,
   members: new Map<Pid, typeof founder>([[founder.pid, founder], [admin.pid, admin]]),
-  admins: new Set([admin.pid]),
+  founders: new Set<Pid>([founder.pid, admin.pid]),
+  admins: new Set<Pid>([admin.pid]),
 });
 
-test("a vouch is accepted only when signed by a current member, for this relay, recently", () => {
+test("an event is accepted only when signed by a current member, for this relay, recently, with an exact ISO time", () => {
   assert.deepEqual(checkEvent(signEvent(vouch(founder), founder.signSec), ctx()), { ok: true, event: vouch(founder) });
   assert.deepEqual(checkEvent(signEvent(vouch(other), other.signSec), ctx()), { ok: false, status: 403, error: "not_a_member" });
   assert.deepEqual(checkEvent(signEvent(vouch(founder), other.signSec), ctx()), { ok: false, status: 401, error: "bad_signature" });
   assert.deepEqual(checkEvent(signEvent({ ...vouch(founder), relay: "elsewhere.example" }, founder.signSec), ctx()), { ok: false, status: 400, error: "wrong_relay" });
   assert.deepEqual(checkEvent(signEvent(vouch(founder, newcomer, at(-30)), founder.signSec), ctx()), { ok: false, status: 400, error: "stale" });
+  for (const ts of ["Tue Nov 10 2026 12:00:00 GMT+0000", "2026-11-10T12:00:00Z/../x", "2026-11-10"]) {
+    assert.deepEqual(checkEvent(signEvent(vouch(founder, newcomer, ts), founder.signSec), ctx()), { ok: false, status: 400, error: "malformed" }, ts);
+  }
 });
 
-test("the relay's join rule and roles decide who may vouch, withdraw and remove", () => {
+test("the join rule and roles decide who may vouch and remove; founders can't be withdrawn or removed by event", () => {
   assert.deepEqual(checkEvent(signEvent(vouch(founder), founder.signSec), ctx({ kind: "admins" })), { ok: false, status: 403, error: "admins_only" });
   assert.equal(checkEvent(signEvent(vouch(admin), admin.signSec), ctx({ kind: "admins" })).ok, true);
   assert.deepEqual(checkEvent(signEvent(vouch(admin), admin.signSec), ctx({ kind: "closed" })), { ok: false, status: 403, error: "join_closed" });
-  assert.deepEqual(checkEvent(signEvent(remove(founder, at(0)), founder.signSec), ctx()), { ok: false, status: 403, error: "admins_only" });
-  assert.equal(checkEvent(signEvent(remove(admin, at(0)), admin.signSec), ctx()).ok, true);
-  assert.equal(checkEvent(signEvent(withdraw(founder, at(0)), founder.signSec), ctx()).ok, true);
+  assert.deepEqual(checkEvent(signEvent(event("remove", founder), founder.signSec), ctx()), { ok: false, status: 403, error: "admins_only" });
+  assert.equal(checkEvent(signEvent(event("remove", admin), admin.signSec), ctx()).ok, true);
+  assert.deepEqual(checkEvent(signEvent(event("remove", admin, founder), admin.signSec), ctx()), { ok: false, status: 400, error: "is_founder" });
+  assert.deepEqual(checkEvent(signEvent(event("withdraw", admin, founder), admin.signSec), ctx()), { ok: false, status: 400, error: "is_founder" });
 });
 
 test("vouching for someone who's already a member is a verified no-op, whatever the join rule", () => {

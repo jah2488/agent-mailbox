@@ -427,3 +427,42 @@ test("under the admins rule, only an admin's vouch counts", async () => {
   assert.equal((await send(event("vouch", alice))).status, 403);
   assert.equal((await send(event("vouch", bob))).status, 201);
 });
+
+test("an admin's removal sticks at the relay: a member's new vouch is refused until an admin re-admits", async () => {
+  const store = memoryStore();
+  const admins = new Set([bob.pid]);
+  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+  const run = (req: Request, minutes: number) => handle(req, { store, roots: allRoots, now: () => at(minutes), join: { kind: "any-member" }, admins });
+  await run(event("vouch", alice, at(0)), 0);
+  assert.deepEqual(await json(await run(event("remove", bob, at(1)), 1)), { member: newcomer.pid, admitted: false });
+  const again = await run(event("vouch", alice, at(2)), 2);
+  assert.deepEqual([again.status, await json(again)], [403, { error: "removed_by_admin" }]);
+  assert.deepEqual(await json(await run(event("vouch", bob, at(3)), 3)), { member: newcomer.pid, admitted: true });
+});
+
+test("a founder can't be removed by event", async () => {
+  const res = await handle(
+    new Request(`${BASE}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(signEvent({ v: 1, kind: "remove", relay: HOST, member: rootEntry(alice), by: bob.pid, ts: NOW.toISOString() }, bob.signSec)),
+    }),
+    { store: memoryStore(), roots: allRoots, now: () => NOW, join: { kind: "any-member" }, admins: new Set([bob.pid]) },
+  );
+  assert.deepEqual([res.status, await json(res)], [400, { error: "is_founder" }]);
+});
+
+test("the identity probe and unknown paths never read the membership records", async () => {
+  const store = memoryStore();
+  const deps = { store, roots: allRoots, now: () => NOW, join: { kind: "any-member" } as const, identity: relayKeyFromSeed("A".repeat(43)) };
+  await handle(new Request(`${BASE}/.well-known/agent-mailbox?challenge=fresh-challenge-0001`), deps);
+  await handle(new Request(`${BASE}/nope`), deps);
+  assert.deepEqual(store.listed, []);
+});
+
+test("a relay stops recording new members at its cap rather than growing without bound", async () => {
+  const store = memoryStore();
+  for (let i = 0; i < 3; i++) await store.put(`members/${generateIdentity().pid}`, new TextEncoder().encode("{}"));
+  const res = await handle(event("vouch", alice), { store, roots: allRoots, now: () => NOW, join: { kind: "any-member" }, memberCap: 3 });
+  assert.deepEqual([res.status, await json(res)], [409, { error: "relay_full" }]);
+});

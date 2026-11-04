@@ -264,6 +264,7 @@ function vouchMessage(name: string, result: MembershipResult): string {
   if (result.ok) return result.admitted ? `Vouched for ${name} on your relay; they can send now.` : `Vouched for ${name}. Your relay needs more vouches before they can send.`;
   if (result.error === "admins_only") return `Your relay only lets admins add people. Ask an admin to run ${name}'s invite.`;
   if (result.error === "join_closed") return `Your relay's operator adds people. Send them ${name}'s invite.`;
+  if (result.error === "removed_by_admin") return `An admin removed ${name} from your relay; only an admin can bring them back.`;
   return `Couldn't vouch for ${name} on your relay (${result.error}).`;
 }
 
@@ -307,7 +308,13 @@ async function relayRemove(args: readonly string[], io: CliIo): Promise<number> 
   }
   const removed = await membership(io.deps, "remove", them);
   if (!removed.ok) {
-    io.err(removed.error === "admins_only" ? "only an admin of your relay can remove people from it." : `Couldn't remove ${them.name} (${removed.error}).`);
+    io.err(
+      removed.error === "admins_only"
+        ? "only an admin of your relay can remove people from it."
+        : removed.error === "is_founder"
+          ? `${them.name} is a founder of your relay; its operator manages founders in MAILBOX_ROOTS.`
+          : `Couldn't remove ${them.name} (${removed.error}).`,
+    );
     return 1;
   }
   io.out(`Removed ${them.name} from your relay. Members can vouch for them again later.`);

@@ -481,3 +481,21 @@ test("relay remove is for admins: anyone else is told so", async () => {
   assert.equal(await run(["relay", "remove", "Stranger"], ioFor(alice)), 0);
   assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" })).delivered, false);
 });
+
+test("relay remove of a founder says the operator manages founders, rather than claiming success", async () => {
+  const { alice } = await world({ join: { kind: "any-member" }, admins: ["alice"] });
+  const io = ioFor(alice);
+  assert.equal(await run(["relay", "remove", "Bob"], io), 1);
+  assert.match(io.errors.join("\n"), /Bob is a founder of your relay; its operator manages founders/);
+  assert.ok(!io.lines.some((l) => /Removed/.test(l)));
+});
+
+test("after an admin removes someone, a member's invite run says only an admin can bring them back", async () => {
+  const { alice, bob, stranger } = await world({ join: { kind: "any-member" }, admins: ["alice"] });
+  await run(await inviteOf(stranger), ioFor(bob));
+  await run(await inviteOf(stranger), ioFor(alice));
+  await run(["relay", "remove", "Stranger"], ioFor(alice));
+  const bobs = ioFor(bob);
+  await run(await inviteOf(stranger), bobs);
+  assert.match(bobs.lines.join("\n"), /An admin removed Stranger/);
+});

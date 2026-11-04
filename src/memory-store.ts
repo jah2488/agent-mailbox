@@ -19,6 +19,9 @@ export function memoryStore(): MemoryStore {
       data.set(key, value);
       return true;
     },
+    put: async (key, value) => {
+      data.set(key, value);
+    },
     list: async (prefix) => {
       listed.push(prefix);
       return [...data.keys()].filter((k) => k.startsWith(prefix)).sort().reverse();

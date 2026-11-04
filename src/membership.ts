@@ -4,10 +4,11 @@ import { readRootEntry, type RootEntry } from "./roots.ts";
 import sodium from "./sodium.ts";
 
 // Who may use a relay beyond its founding allowlist. A member vouches for a
-// newcomer by signing an event with their root key; the relay keeps every
-// event, and replaying them in time order says who's admitted. A voucher can
-// withdraw their vouch and an admin can remove anyone. The relay's join rule
-// says how many vouches admit someone, and whose count.
+// newcomer by signing an event with their root key. The relay keeps one
+// record per member (who currently vouches for them, and whether an admin
+// removed them), so storage grows with people rather than with requests.
+// A voucher can withdraw their vouch; an admin's removal sticks until an
+// admin vouches for them again. The join rule says how many vouches admit.
 
 export type JoinRule = { readonly kind: "any-member" } | { readonly kind: "admins" } | { readonly kind: "vouches"; readonly count: number } | { readonly kind: "closed" };
 export type MembershipEvent = {
@@ -24,6 +25,8 @@ export type SignedEvent = { readonly e: MembershipEvent; readonly s: string };
 const DOMAIN = "agent-mailbox/v1/membership\n";
 const MAX_SKEW_MS = 5 * 60_000;
 const KINDS = new Set(["vouch", "withdraw", "remove"]);
+// Exactly what toISOString writes: anything looser could sort or nest unexpectedly in storage keys.
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const b64url = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.URLSAFE_NO_PADDING);
 const signedBytes = (e: MembershipEvent) => new TextEncoder().encode(DOMAIN + canonicalize(e));
 
@@ -40,21 +43,26 @@ export function signEvent(event: MembershipEvent, signSec: Uint8Array): SignedEv
   return { e: event, s: b64url(sodium.crypto_sign_detached(signedBytes(event), signSec)) };
 }
 
-/** Everyone the events admit under this rule, replayed in time order. */
-export function admitted(events: readonly MembershipEvent[], rule: JoinRule): ReadonlyMap<Pid, Peer> {
-  if (rule.kind === "closed") return new Map();
-  const needed = rule.kind === "vouches" ? rule.count : 1;
-  const vouchers = new Map<Pid, { readonly peer: Peer; readonly by: Set<string> }>();
-  for (const e of [...events].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))) {
-    const peer = readRootEntry(e.member);
-    if (typeof peer === "string") continue;
-    const entry = vouchers.get(peer.pid) ?? { peer, by: new Set<string>() };
-    if (e.kind === "vouch") entry.by.add(e.by);
-    else if (e.kind === "withdraw") entry.by.delete(e.by);
-    else entry.by.clear();
-    vouchers.set(peer.pid, entry);
-  }
-  return new Map([...vouchers.values()].filter((v) => v.by.size >= needed).map((v) => [v.peer.pid, v.peer]));
+/** What the relay keeps about one admitted-or-not member. */
+export type MemberRecord = { readonly member: RootEntry; readonly vouchers: readonly string[]; readonly removed: boolean };
+
+/** The record after one checked event, or why the event can't apply to this member as they stand. */
+export function applyEvent(
+  record: MemberRecord | undefined,
+  event: MembershipEvent,
+  actorIsAdmin: boolean,
+): { readonly ok: true; readonly record: MemberRecord } | { readonly ok: false; readonly status: number; readonly error: string } {
+  const current = record ?? { member: event.member, vouchers: [], removed: false };
+  if (event.kind === "remove") return { ok: true, record: { member: current.member, vouchers: [], removed: true } };
+  if (event.kind === "withdraw") return { ok: true, record: { ...current, vouchers: current.vouchers.filter((by) => by !== event.by) } };
+  if (current.removed && !actorIsAdmin) return { ok: false, status: 403, error: "removed_by_admin" };
+  const vouchers = current.vouchers.includes(event.by) ? current.vouchers : [...current.vouchers, event.by];
+  return { ok: true, record: { member: current.member, vouchers, removed: false } };
+}
+
+export function isAdmitted(record: MemberRecord | undefined, rule: JoinRule): boolean {
+  if (record === undefined || record.removed || rule.kind === "closed") return false;
+  return record.vouchers.length >= (rule.kind === "vouches" ? rule.count : 1);
 }
 
 export type EventContext = {
@@ -63,6 +71,8 @@ export type EventContext = {
   readonly rule: JoinRule;
   /** Current members: founders plus everyone admitted so far. */
   readonly members: ReadonlyMap<Pid, Peer>;
+  /** Founders are the operator's to manage (MAILBOX_ROOTS); no event withdraws or removes them. */
+  readonly founders: ReadonlySet<Pid>;
   readonly admins: ReadonlySet<Pid>;
 };
 
@@ -73,7 +83,15 @@ export function checkEvent(
 ): { readonly ok: true; readonly event: MembershipEvent; readonly alreadyMember?: true } | { readonly ok: false; readonly status: number; readonly error: string } {
   const signed = value as Partial<SignedEvent> | null;
   const e = signed?.e as Partial<MembershipEvent> | undefined;
-  if (typeof signed?.s !== "string" || e === undefined || e.v !== 1 || !KINDS.has(e.kind as string) || ![e.relay, e.by, e.ts].every((f) => typeof f === "string")) {
+  if (
+    typeof signed?.s !== "string" ||
+    e === undefined ||
+    e.v !== 1 ||
+    !KINDS.has(e.kind as string) ||
+    ![e.relay, e.by, e.ts].every((f) => typeof f === "string") ||
+    !ISO.test(e.ts as string) ||
+    new Date(e.ts as string).toISOString() !== e.ts
+  ) {
     return { ok: false, status: 400, error: "malformed" };
   }
   const event = e as MembershipEvent;
@@ -91,6 +109,7 @@ export function checkEvent(
   if (!(Math.abs(Date.parse(event.ts) - ctx.now.getTime()) <= MAX_SKEW_MS)) return { ok: false, status: 400, error: "stale" };
   // Adding someone who's already in, a founder say, changes nothing and needs no join rule.
   if (event.kind === "vouch" && ctx.members.has(event.member.pid as Pid)) return { ok: true, event, alreadyMember: true };
+  if (event.kind !== "vouch" && ctx.founders.has(event.member.pid as Pid)) return { ok: false, status: 400, error: "is_founder" };
   const isAdmin = ctx.admins.has(actor.pid);
   if (event.kind === "vouch" && ctx.rule.kind === "closed") return { ok: false, status: 403, error: "join_closed" };
   if (event.kind === "vouch" && ctx.rule.kind === "admins" && !isAdmin) return { ok: false, status: 403, error: "admins_only" };
