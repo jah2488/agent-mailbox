@@ -7,6 +7,8 @@ import { handle, type Store } from "./relay.ts";
 import { memoryStore } from "./memory-store.ts";
 import { issueCert } from "./cert.ts";
 import { relayKeyFromSeed, verifyRelayDescription } from "./relay-identity.ts";
+import { signEvent, type JoinRule } from "./membership.ts";
+import { rootEntry } from "./roots.ts";
 
 const alice = generateIdentity();
 const bob = generateIdentity();
@@ -369,4 +371,59 @@ test("a missing or malformed challenge is refused", async () => {
   const deps = { store: memoryStore(), roots: allRoots, now: () => NOW, identity: RELAY_KEY };
   assert.equal((await handle(new Request(`${BASE}/.well-known/agent-mailbox`), deps)).status, 400);
   assert.equal((await handle(new Request(`${BASE}/.well-known/agent-mailbox?challenge=short`), deps)).status, 400);
+});
+
+// ---- Membership ----
+
+const newcomer = generateIdentity();
+const event = (kind: "vouch" | "withdraw" | "remove", by: Identity, at: Date = NOW): Request =>
+  new Request(`${BASE}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(signEvent({ v: 1, kind, relay: HOST, member: rootEntry(newcomer), by: by.pid, ts: at.toISOString() }, by.signSec)),
+  });
+const open = (store: Store, join: JoinRule = { kind: "any-member" }, admins: ReadonlySet<Pid> = new Set()) => (req: Request) =>
+  handle(req, { store, roots: allRoots, now: () => NOW, join, admins });
+
+test("a member's vouch admits a newcomer, who can then send to members", async () => {
+  const store = memoryStore();
+  const send = open(store);
+  assert.equal((await send(put(newcomer, 0, envelope(newcomer, bob, 0, null)))).status, 403, "unknown before the vouch");
+  const vouched = await send(event("vouch", alice));
+  assert.deepEqual([vouched.status, await json(vouched)], [201, { member: newcomer.pid, admitted: true }]);
+  assert.equal((await send(put(newcomer, 0, envelope(newcomer, bob, 0, null)))).status, 201);
+});
+
+test("a vouch from someone who isn't a member is refused, and admits no one", async () => {
+  const store = memoryStore();
+  const send = open(store);
+  const outsider = generateIdentity();
+  const res = await send(new Request(`${BASE}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(signEvent({ v: 1, kind: "vouch", relay: HOST, member: rootEntry(newcomer), by: outsider.pid, ts: NOW.toISOString() }, outsider.signSec)),
+  }));
+  assert.equal(res.status, 403);
+  assert.equal((await send(put(newcomer, 0, envelope(newcomer, bob, 0, null)))).status, 403);
+});
+
+test("withdrawing the only vouch takes the newcomer back out", async () => {
+  const store = memoryStore();
+  await open(store)(event("vouch", alice));
+  const later = new Date(NOW.getTime() + 60_000);
+  const withdrawn = await handle(event("withdraw", alice, later), { store, roots: allRoots, now: () => later, join: { kind: "any-member" }, admins: new Set() });
+  assert.deepEqual(await json(withdrawn), { member: newcomer.pid, admitted: false });
+  assert.equal((await open(store)(put(newcomer, 0, envelope(newcomer, bob, 0, null)))).status, 403);
+});
+
+test("a relay with no join rule configured admits no one beyond its allowlist", async () => {
+  const res = await relay()(event("vouch", alice));
+  assert.deepEqual([res.status, await json(res)], [403, { error: "join_closed" }]);
+});
+
+test("under the admins rule, only an admin's vouch counts", async () => {
+  const store = memoryStore();
+  const send = open(store, { kind: "admins" }, new Set([bob.pid]));
+  assert.equal((await send(event("vouch", alice))).status, 403);
+  assert.equal((await send(event("vouch", bob))).status, 201);
 });

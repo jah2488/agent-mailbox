@@ -27,3 +27,9 @@ test("malformed root lists are refused, never half-loaded", () => {
   assert.equal(parseRoots(JSON.stringify([{ pid: "x" }])).ok, false);
   assert.equal(parseRoots(JSON.stringify([{ ...rootEntry(toPeer(alice)), sign_pub: "AAAA" }])).ok, false);
 });
+
+test("entries marked admin are the relay's admins; others are plain members", () => {
+  const parsed = parseRoots(JSON.stringify([{ ...rootEntry(toPeer(alice)), admin: true }, rootEntry(toPeer(bob))]));
+  assert.ok(parsed.ok);
+  assert.deepEqual([...parsed.admins], [alice.pid]);
+});

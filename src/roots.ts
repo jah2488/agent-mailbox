@@ -26,7 +26,7 @@ function decodeKey(text: unknown): Uint8Array | null {
  * leave the relay running with a quietly shorter allowlist. The pid is
  * recomputed from the key, so config can't pair a name with someone else's key.
  */
-export function parseRoots(json: string): { readonly ok: true; readonly roots: ReadonlyMap<Pid, Peer> } | { readonly ok: false; readonly error: string } {
+export function parseRoots(json: string): { readonly ok: true; readonly roots: ReadonlyMap<Pid, Peer>; readonly admins: ReadonlySet<Pid> } | { readonly ok: false; readonly error: string } {
   let entries: unknown;
   try {
     entries = JSON.parse(json);
@@ -37,12 +37,15 @@ export function parseRoots(json: string): { readonly ok: true; readonly roots: R
   if (entries.length === 0) return { ok: false, error: "roots list is empty" };
 
   const peers: Peer[] = [];
+  const admins = new Set<Pid>();
   for (const [index, entry] of entries.entries()) {
     const peer = readRootEntry(entry);
     if (typeof peer === "string") return { ok: false, error: `root ${index}: ${peer}` };
     peers.push(peer);
+    // Admins may vouch under the admins rule and remove anyone admitted by vouches.
+    if ((entry as { admin?: unknown }).admin === true) admins.add(peer.pid);
   }
-  return { ok: true, roots: new Map(peers.map((peer) => [peer.pid, peer])) };
+  return { ok: true, roots: new Map(peers.map((peer) => [peer.pid, peer])), admins };
 }
 
 /** One entry's keys, or why they're unusable. Extra fields (name, relay) are ignored. */

@@ -1,5 +1,6 @@
 import { hashOf, verifyOuter, type OuterError } from "./envelope.ts";
 import { CHALLENGE_PATTERN, describeRelay, WELL_KNOWN_PATH, type RelayKey } from "./relay-identity.ts";
+import { admitted, checkEvent, type JoinRule, type MembershipEvent, type SignedEvent } from "./membership.ts";
 import type { Peer, Pid } from "./identity.ts";
 import { verifyRequest } from "./request-auth.ts";
 import sodium from "./sodium.ts";
@@ -35,7 +36,38 @@ export type RelayDeps = {
   readonly now: () => Date;
   /** The relay's own key, from MAILBOX_RELAY_KEY. Without it the relay can't prove which relay it is, and clients refuse it. */
   readonly identity?: RelayKey;
+  /** Who may join beyond the founding allowlist (MAILBOX_JOIN). Unset means nobody: the allowlist is all there is. */
+  readonly join?: JoinRule;
+  /** Founders marked "admin" in MAILBOX_ROOTS. */
+  readonly admins?: ReadonlySet<Pid>;
 };
+
+const MEMBERS = "members/";
+
+async function membershipEvents(store: Store): Promise<MembershipEvent[]> {
+  const keys = await store.list(MEMBERS);
+  const values = await Promise.all(keys.map((key) => store.get(key)));
+  return values.flatMap((bytes) => (bytes === null ? [] : [(JSON.parse(new TextDecoder().decode(bytes)) as SignedEvent).e]));
+}
+
+/** The founders plus everyone the stored events admit. Recomputed per request, so a vouch or withdrawal applies at once. */
+async function effectiveRoots(deps: RelayDeps): Promise<ReadonlyMap<Pid, Peer>> {
+  if (deps.join === undefined || deps.join.kind === "closed") return deps.roots;
+  return new Map([...admitted(await membershipEvents(deps.store), deps.join), ...deps.roots]);
+}
+
+async function postMember(req: Request, url: URL, deps: RelayDeps, founders: ReadonlyMap<Pid, Peer>): Promise<Response> {
+  const contentType = (req.headers.get("content-type") ?? "").split(";")[0]?.trim();
+  if (contentType !== "application/json") return refuse(415, "content_type_must_be_application_json");
+  const body: unknown = await req.json().catch(() => null);
+  const checked = checkEvent(body, { host: url.host, now: deps.now(), rule: deps.join ?? { kind: "closed" }, members: deps.roots, admins: deps.admins ?? new Set() });
+  if (!checked.ok) return refuse(checked.status, checked.error);
+  const { event } = checked;
+  const member = event.member.pid;
+  // Write-once and dated, so every vouch, withdrawal and removal stays on record.
+  await deps.store.createOnly(`${MEMBERS}${member}/${event.ts}-${event.by}-${event.kind}`, new TextEncoder().encode(JSON.stringify(body)));
+  return reply(201, { member, admitted: (await effectiveRoots({ ...deps, roots: founders })).has(member as Pid) });
+}
 
 const PID = "[a-z2-7]{16}";
 // 15 digits keeps every seq inside Number.MAX_SAFE_INTEGER. Routes and the
@@ -66,8 +98,13 @@ const OUTER_STATUS: Readonly<Record<OuterError, number>> = {
   bad_signature: 401,
 };
 
-export async function handle(req: Request, deps: RelayDeps): Promise<Response> {
+export async function handle(req: Request, given: RelayDeps): Promise<Response> {
   const url = new URL(req.url);
+  const deps = { ...given, roots: await effectiveRoots(given) };
+  if (url.pathname === "/members") {
+    if (req.method !== "POST") return refuse(405, "method_not_allowed");
+    return postMember(req, url, deps, given.roots);
+  }
   if (url.pathname === WELL_KNOWN_PATH) {
     if (req.method !== "GET") return refuse(405, "method_not_allowed");
     if (deps.identity === undefined) return refuse(503, "relay_has_no_key");
