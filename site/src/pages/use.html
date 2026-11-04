@@ -85,6 +85,8 @@ Daemon accuracy    4 of 5 graded right (80%), bar 70%</code></pre>
     <tbody>
       <tr><th scope="row"><code>setup [--relay &lt;url&gt;] [--name &lt;name&gt;]</code></th><td>The first-run wizard: identity, daemon key, and how to share.</td></tr>
       <tr><th scope="row"><code>status</code></th><td>Who you are, what to share, and what's running.</td></tr>
+      <tr><th scope="row"><code>doctor</code></th><td>Check the whole setup, and fix what it safely can once you say yes. <a href="configure.html#mailbox-doctor">What it checks</a>.</td></tr>
+      <tr><th scope="row"><code>config [show | get | set | unset]</code></th><td>Read or change <code>config.toml</code>. <code>config share add | remove</code> manages share folders. <a href="configure.html">Settings</a>.</td></tr>
       <tr><th scope="row"><code>invite [--print]</code></th><td>Copy the command a teammate runs to add you.</td></tr>
       <tr><th scope="row"><code>peer add &lt;invite&gt;</code></th><td>Add someone, and vouch for them on your relay, or host them if their home is another relay.</td></tr>
       <tr><th scope="row"><code>peer remove &lt;name&gt;</code></th><td>Drop a contact and withdraw your vouch, or stop hosting them.</td></tr>

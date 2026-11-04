@@ -15,6 +15,7 @@ const PAGES = [
   { file: "index.html", nav: "Overview", title: "agent-mailbox", description: "Signed, encrypted mail between coworkers' AI agents. Ask a teammate's agent; it answers from a folder they chose, or waits for them.", scripts: ["galaxy.js", "seal.js"] },
   { file: "install.html", nav: "Install", title: "Install · agent-mailbox", description: "Install agent-mailbox in one command, connect with teammates, and turn on the daemon." },
   { file: "use.html", nav: "Use it", title: "Use it · agent-mailbox", description: "Ask a teammate's agent, read what arrives, keep promises, and let your daemon answer." },
+  { file: "configure.html", nav: "Configure", title: "Configure · agent-mailbox", description: "config.toml, share folders and the security contract, mailbox config, and mailbox doctor." },
   { file: "relay.html", nav: "Relay spec", title: "Relay spec · agent-mailbox", description: "The agent-mailbox/1 relay protocol, and how to run a conforming relay.", contents: true },
 ];
 
@@ -64,6 +65,25 @@ function splitLead(markdown) {
   return { title, rest };
 }
 
+// Short on purpose: it points the agent at the spec rather than restating it.
+const AGENT_PROMPT = `Build and deploy an agent-mailbox relay on Netlify.
+
+1. Read the full protocol: https://agent-mailbox.netlify.app/relay.html (source: ${REPO}/tree/main/docs). Follow it exactly. The reference relay is src/relay.ts in ${REPO}; reuse it or match its behavior.
+2. Implement every route, encoding and error code the spec lists. Storage must have an atomic create-only write.
+3. Deploy to Netlify with MAILBOX_RELAY_KEY and MAILBOX_ROOTS set, as the "Run a relay" section describes. Don't put the site behind password or SSO protection.
+4. Verify: install the mailbox CLI and run \`mailbox relay verify <relay URL>\`. Fix anything not marked ✓. Then make throwaway founders with \`node scripts/smoke.ts keys ./verify-keys\`, add them to MAILBOX_ROOTS, redeploy, run \`mailbox relay verify <relay URL> --full ./verify-keys\`, and remove them again.
+5. Report the relay URL and both verify outputs.`;
+
+async function configurePage() {
+  const doc = splitLead(await readFile(join(docs, "configuration.md"), "utf8"));
+  return `
+<header class="page-intro"><p class="sk-kicker">Settings</p><h1>Configure</h1>
+<p class="sk-lead">One optional file holds your settings: which folders the daemon may read, how it behaves, and which notices you get. <code>mailbox doctor</code> checks it with the rest of your setup.</p>
+<p class="source-note">Rendered from <a href="${REPO}/blob/main/docs/configuration.md"><code>docs/configuration.md</code></a> in the repo.</p></header>
+<section class="sk-section spec">
+${renderDoc(doc.rest, { shift: 0, docFile: "configuration.md", anchors: { "relay-protocol.md": "relay.html#the-protocol", "run-a-relay.md": "relay.html#run-a-relay" } })}</section>`;
+}
+
 async function relayPage() {
   const anchors = { "relay-protocol.md": "#the-protocol", "run-a-relay.md": "#run-a-relay" };
   const protocol = splitLead(await readFile(join(docs, "relay-protocol.md"), "utf8"));
@@ -71,6 +91,8 @@ async function relayPage() {
   return `
 <header class="page-intro"><p class="sk-kicker">agent-mailbox/1</p><h1>Build a relay</h1>
 <p class="sk-lead">A relay is the one server a team shares. It stores encrypted envelopes, checks their signatures and chains, and serves each envelope only to its sender and recipient. Below is the full protocol a relay must follow, then a guide to deploying the reference relay.</p>
+<div class="agent-prompt"><p class="agent-prompt-label">Have an AI agent build one: copy this prompt</p>
+<pre class="sk-code"><code>${escape(AGENT_PROMPT)}</code></pre></div>
 <p class="source-note">Rendered from <a href="${REPO}/blob/main/docs/relay-protocol.md"><code>docs/relay-protocol.md</code></a> and <a href="${REPO}/blob/main/docs/run-a-relay.md"><code>docs/run-a-relay.md</code></a> in the repo.</p></header>
 <section class="sk-section spec" aria-labelledby="the-protocol"><h2 id="the-protocol">The protocol</h2>
 ${renderDoc(protocol.rest, { shift: 1, docFile: "relay-protocol.md", anchors })}</section>
@@ -90,7 +112,7 @@ await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 await cp(join(here, "src", "assets"), out, { recursive: true });
 for (const page of PAGES) {
-  const content = page.file === "relay.html" ? await relayPage() : await readFile(join(here, "src", "pages", page.file), "utf8");
+  const content = page.file === "relay.html" ? await relayPage() : page.file === "configure.html" ? await configurePage() : await readFile(join(here, "src", "pages", page.file), "utf8");
   const html = layout
     .replaceAll("{{title}}", escape(page.title))
     .replaceAll("{{description}}", escape(page.description))

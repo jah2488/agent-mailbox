@@ -39,7 +39,7 @@ h1, h2, h3 { letter-spacing: -.02em; }
 .steps { padding-left: 1.4rem; max-width: 52rem; }
 .steps li { margin-bottom: 1.25rem; }
 .steps .sk-code { margin-top: .5rem; }
-.sk-code { max-width: 100%; white-space: pre; }
+.sk-code { max-width: 100%; }
 .sk-section > .sk-code { max-width: 60rem; }
 
 /* What-arrives guidance tags. */
@@ -64,7 +64,7 @@ h1, h2, h3 { letter-spacing: -.02em; }
 .spec table caption { text-align: left; font-size: .8rem; color: var(--sk-ink-faint); padding-bottom: .4rem; }
 
 /* The code-block copy button floats over the first line instead of pushing a blank line above it. */
-.sk-code { padding: 1.1rem 4.75rem 1.1rem 1.25rem; }
+.sk-code { padding: 1.1rem 4.75rem 1.1rem 1.25rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Hero: full-bleed, no frame. The canvas fades into the page at every edge. */
 .hero { position: relative; isolation: isolate; min-height: min(94vh, 58rem); margin: calc(-2.5rem * var(--sk-density, .72)) calc(50% - 50vw) 1rem; color: var(--hero-ink); display: flex; flex-direction: column; justify-content: center; padding-inline: max(1.25rem, calc(50vw - 38rem)); }
@@ -161,3 +161,10 @@ h1, h2, h3 { letter-spacing: -.02em; }
 .sk-rail-inner { max-height: calc(100dvh - var(--sk-header-h) - 4rem); overflow: auto; }
 @media (max-width: 860px) { .sk-rail { left: 1rem; right: 1rem; width: auto; } }
 @media (min-width: 861px) { html:not(.sk-contents-closed) body[data-page="relay"] .sk-main { padding-right: 18.5rem; } }
+
+/* The relay page's copy-a-prompt box. */
+.agent-prompt { margin: 1.5rem 0 1rem; max-width: 52rem; }
+.agent-prompt-label { margin: 0 0 .5rem; font: 600 .8rem var(--sk-font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--galaxy-signal); }
+.agent-prompt .sk-code { border-color: color-mix(in srgb, var(--galaxy-signal) 45%, var(--sk-rule)); }
+.spec td, .spec th { white-space: normal; }
+.spec td:last-child { min-width: 18rem; }

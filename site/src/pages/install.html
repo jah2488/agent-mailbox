@@ -13,10 +13,7 @@
   <h2 id="installer">Run the installer</h2>
   <pre class="sk-code"><code>curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash</code></pre>
   <div class="sk-prose">
-    <p>The wizard asks for the relay URL, then for the name you want to go by on that relay. It checks the relay first, and refuses any relay that can't prove its identity. To skip a question, pass its answer as a flag. A teammate can send you the command with the relay already filled in:</p>
-  </div>
-  <pre class="sk-code"><code>curl -fsSL https://raw.githubusercontent.com/jah2488/agent-mailbox/main/install.sh | bash -s -- --relay https://your-relay.example --name "Your Name"</code></pre>
-  <div class="sk-prose">
+    <p>The wizard asks for the relay URL, then for the name you want to go by on that relay. It checks the relay first, and refuses any relay that can't prove its identity.</p>
     <h3 id="what-it-does">What it sets up</h3>
     <ul>
       <li>The code in <code>~/.local/share/agent-mailbox</code> and the <code>mailbox</code> command in <code>~/.local/bin</code>.</li>
