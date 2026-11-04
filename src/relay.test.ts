@@ -6,6 +6,7 @@ import { signRequest } from "./request-auth.ts";
 import { handle, type Store } from "./relay.ts";
 import { memoryStore } from "./memory-store.ts";
 import { issueCert } from "./cert.ts";
+import { relayKeyFromSeed, verifyRelayDescription } from "./relay-identity.ts";
 
 const alice = generateIdentity();
 const bob = generateIdentity();
@@ -344,4 +345,28 @@ test("an expired agent key cannot backdate an envelope into its cert's window", 
 test("a current cert does not cover an envelope dated before the cert was issued", async () => {
   const before = new Date(NOW.getTime() - 86_400_000);
   assert.equal((await relay()(put(alice, 0, agentEnvelope(before, NOW)))).status, 401);
+});
+
+// ---- Relay identity ----
+
+const RELAY_KEY = relayKeyFromSeed("A".repeat(43));
+
+test("the relay describes itself, signed for its host and the client's challenge", async () => {
+  const challenge = "fresh-challenge-0001";
+  const res = await handle(new Request(`${BASE}/.well-known/agent-mailbox?challenge=${challenge}`), { store: memoryStore(), roots: allRoots, now: () => NOW, identity: RELAY_KEY });
+  assert.equal(res.status, 200);
+  const verified = verifyRelayDescription(await res.json(), HOST, challenge);
+  assert.ok(verified.ok, JSON.stringify(verified));
+  assert.equal(verified.relayKey, RELAY_KEY.publicKey);
+});
+
+test("a relay without its own key says so rather than describing itself", async () => {
+  const res = await relay()(new Request(`${BASE}/.well-known/agent-mailbox?challenge=fresh-challenge-0001`));
+  assert.deepEqual([res.status, await json(res)], [503, { error: "relay_has_no_key" }]);
+});
+
+test("a missing or malformed challenge is refused", async () => {
+  const deps = { store: memoryStore(), roots: allRoots, now: () => NOW, identity: RELAY_KEY };
+  assert.equal((await handle(new Request(`${BASE}/.well-known/agent-mailbox`), deps)).status, 400);
+  assert.equal((await handle(new Request(`${BASE}/.well-known/agent-mailbox?challenge=short`), deps)).status, 400);
 });

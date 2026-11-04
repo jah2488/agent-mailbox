@@ -1,4 +1,5 @@
 import { hashOf, verifyOuter, type OuterError } from "./envelope.ts";
+import { CHALLENGE_PATTERN, describeRelay, WELL_KNOWN_PATH, type RelayKey } from "./relay-identity.ts";
 import type { Peer, Pid } from "./identity.ts";
 import { verifyRequest } from "./request-auth.ts";
 import sodium from "./sodium.ts";
@@ -32,6 +33,8 @@ export type RelayDeps = {
   readonly store: Store;
   readonly roots: ReadonlyMap<Pid, Peer>;
   readonly now: () => Date;
+  /** The relay's own key, from MAILBOX_RELAY_KEY. Without it the relay can't prove which relay it is, and clients refuse it. */
+  readonly identity?: RelayKey;
 };
 
 const PID = "[a-z2-7]{16}";
@@ -65,6 +68,13 @@ const OUTER_STATUS: Readonly<Record<OuterError, number>> = {
 
 export async function handle(req: Request, deps: RelayDeps): Promise<Response> {
   const url = new URL(req.url);
+  if (url.pathname === WELL_KNOWN_PATH) {
+    if (req.method !== "GET") return refuse(405, "method_not_allowed");
+    if (deps.identity === undefined) return refuse(503, "relay_has_no_key");
+    const challenge = url.searchParams.get("challenge") ?? "";
+    if (!CHALLENGE_PATTERN.test(challenge)) return refuse(400, "bad_challenge");
+    return reply(200, describeRelay(deps.identity, url.host, challenge));
+  }
   const log = LOG_ROUTE.exec(url.pathname);
   if (log !== null) {
     const from = log[1] as Pid;
