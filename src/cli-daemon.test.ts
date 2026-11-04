@@ -112,6 +112,57 @@ test("review lists what the daemon deferred, with the question and the private r
   assert.match(shown, /responder exited 3/);
 });
 
+test("review lists the daemon's ungraded answers, grade records a verdict, and stats scores it against the 70% bar", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "how is the redeploy?" });
+  await run(["daemon", "once"], io);
+
+  io.lines.length = 0;
+  assert.equal(await run(["review"], io), 0);
+  assert.match(io.lines.join("\n"), /how is the redeploy\?/);
+  assert.match(io.lines.join("\n"), /All green\./);
+  assert.match(io.lines.join("\n"), new RegExp(`mailbox grade ${asked.ref} right\\|wrong`));
+
+  assert.equal(await run(["grade", asked.ref, "right"], io), 0, io.errors.join("\n"));
+  io.lines.length = 0;
+  await run(["review"], io);
+  assert.match(io.lines.join("\n"), /Nothing needs you/);
+
+  io.lines.length = 0;
+  assert.equal(await run(["stats"], io), 0, io.errors.join("\n"));
+  const shown = io.lines.join("\n");
+  assert.match(shown, /Asks you received\s+1: you answered 0, your daemon 1, waiting on you 0, unanswered 0/);
+  assert.match(shown, /1 of 1 graded right \(100%\), bar 70%/);
+});
+
+test("grade refuses a ref the daemon never answered, and a verdict other than right or wrong", async () => {
+  const { alice, bob } = await world();
+  const io = await setUp(bob);
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await run(["daemon", "once"], io);
+  assert.equal(await run(["grade", "nope", "right"], io), 1);
+  assert.match(io.errors.join("\n"), /no answer from your daemon with ref nope/);
+  assert.equal(await run(["grade", asked.ref, "maybe"], io), 2);
+
+  await useResponder(io, [process.execPath, "-e", "process.exit(3)"]);
+  const deferred = await send(alice.deps, { to: "Bob", tag: "ask", text: "rotate the keys?" });
+  await run(["daemon", "once"], io);
+  assert.equal(await run(["grade", deferred.ref, "wrong"], io), 1, "a deferral has no answer to grade");
+});
+
+test("stats works without a daemon and counts only the window --since names", async () => {
+  const { alice, bob } = await world();
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "one" });
+  const io = ioFor(bob);
+  assert.equal(await run(["stats", "--since", "7d"], io), 0, io.errors.join("\n"));
+  const shown = io.lines.join("\n");
+  assert.match(shown, /Last 7 days/);
+  assert.match(shown, /Asks you received\s+1: .*unanswered 1/);
+  assert.match(shown, /nothing graded yet/);
+  assert.equal(await run(["stats", "--since", "soon"], io), 2);
+});
+
 test("audit verify fails, naming the entry, once the log is edited", async () => {
   const { alice, bob } = await world();
   const io = await setUp(bob);

@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { renderStatus, styles, type Fact } from "./banner.ts";
 import { hasAskRule, hasHook, withHook, withoutAskRule, withoutHook } from "./claude-settings.ts";
 import { isDevCheckout } from "./config.ts";
-import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
+import { auditVerify, daemonCommand, daemonInstalled, daemonStop, grade, policyCommand, review, statsCommand } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
 import { checkRelay, readPins } from "./relay-check.ts";
 import { membership, promises, send, sync, type ClientDeps, type MembershipResult, type NamedCommitment } from "./client.ts";
@@ -64,7 +64,9 @@ const USAGE = [
   "  daemon start | stop                  turn the daemon on (now and at login) or off",
   "  daemon revoke                        tell contacts to refuse the agent from now on, and retire its keys",
   "  policy sign | show                   sign policy.cedar as the next version, or print the one in force",
-  "  review                               list what the daemon deferred or flagged for you",
+  "  review                               list what the daemon deferred or flagged, and its answers to grade",
+  "  grade <ref> right|wrong              record whether a daemon answer was right",
+  "  stats [--since 14d]                  asks, answers, promises and daemon accuracy for the window",
   "  audit verify                         check the daemon's audit log is intact and signed",
   "  update                               get the latest version and restart what runs it",
   "  uninstall                            stop the daemon, unregister from Claude Code, remove the command",
@@ -558,6 +560,10 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return policyCommand(rest, io);
     case "review":
       return review(io);
+    case "grade":
+      return grade(rest, io);
+    case "stats":
+      return statsCommand(rest, io);
     case "update":
       return update(io);
     case "status":

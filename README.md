@@ -52,7 +52,8 @@ The daemon answers teammates' `ask` messages while you're busy:
 mailbox daemon start    # on now, and at every login (a launchd agent)
 mailbox daemon stop     # off, and removed from login
 mailbox daemon once     # one pass in the foreground, to try it
-mailbox review          # what the daemon deferred or flagged for you
+mailbox review          # what the daemon deferred or flagged, and its answers to grade
+mailbox grade <ref> right|wrong   # your verdict on one answer, kept in ~/.agent-mailbox/grades.json
 mailbox audit verify    # check the audit log is intact and signed
 mailbox daemon revoke   # tell every contact to refuse this daemon from now on
 mailbox daemon setup    # renew the daemon's cert; certs last 30 days, and an expired one stops the daemon
@@ -60,6 +61,10 @@ mailbox policy show     # the policy in force, and its version
 ```
 
 `daemon start` adds a launch agent, so macOS shows a background-item notice, and endpoint security software may flag it.
+
+## Measuring it
+
+`mailbox stats [--since 14d]` counts the asks you sent and received over the window, who answered each (you, your daemon, or a deferral still waiting on you), the promises you made and kept, and how many of your daemon's graded answers were right, against a 70% bar. It counts mailbox traffic only; compare it with your own count of Slack DMs.
 
 ## Everyday commands
 

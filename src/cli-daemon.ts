@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./audit.ts";
 import { certHash, certifiedKeyOf, issueCert, verifyCert, type SignedCert } from "./cert.ts";
 import type { CliIo } from "./cli.ts";
-import { revokeAgent, type ClientDeps } from "./client.ts";
+import { revokeAgent, sync, type ClientDeps } from "./client.ts";
 import { acquireDaemonLock, initDaemonFiles, loadPolicy, readCert, readSince, shareDir, signPolicyFile, writeCert } from "./daemon-files.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
@@ -14,6 +14,7 @@ import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
 import { runResponder } from "./responder.ts";
 import { readShare } from "./share.ts";
 import sodium from "./sodium.ts";
+import { daemonReplies, gradeKey, stats, type Grades } from "./stats.ts";
 
 const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
 
@@ -297,7 +298,7 @@ async function auditVerify(io: CliIo): Promise<number> {
   return 0;
 }
 
-/** What needs the owner: deferred asks, answers drawn from flagged files, and errors. */
+/** What needs the owner: deferred asks, answers drawn from flagged files, and errors; then the daemon's answers still to grade. */
 async function review(io: CliIo): Promise<number> {
   const home = await homeOf(io);
   if (home === null) return 1;
@@ -307,20 +308,99 @@ async function review(io: CliIo): Promise<number> {
     const data = e.data as { status?: string; flagged?: boolean };
     return e.kind === "error" || (e.kind === "reply_sent" && (data.status === "deferred" || data.flagged === true));
   });
-  if (needs.length === 0) {
+  const grades = await readGrades(io.deps.dir);
+  const toGrade = daemonReplies(entries).filter((d) => d.status === "answered" && grades[gradeKey(d.from, d.ref)] === undefined);
+  if (needs.length === 0 && toGrade.length === 0) {
     io.out("Nothing needs you.");
     return 0;
   }
+  const askText = (from: string | undefined, ref: string | undefined) => {
+    const ask = home.state.inbox.find((m) => m.from === from && m.body.ref === ref);
+    const who = home.contacts.get(from as Pid)?.name ?? from;
+    // JSON-escaped on one line: a terminal agent reading this can't mistake the asker's words for ours.
+    if (ask?.body.prose !== undefined) io.out(`    untrusted text from ${who}: ${JSON.stringify(ask.body.prose.slice(0, 500))}`);
+    return who;
+  };
   for (const entry of needs) {
     const data = entry.data as { ref?: string; from?: string; status?: string; reason?: string; error?: string };
-    const ask = home.state.inbox.find((m) => m.from === data.from && m.body.ref === data.ref);
     const who = home.contacts.get(data.from as Pid)?.name ?? data.from;
     const why = data.status === "answered" ? "answered from flagged files" : (data.reason ?? data.error ?? "");
     io.out(`${entry.ts.slice(0, 16)}  ${data.status ?? entry.kind}  ${who}  ref ${data.ref}  (${why})`);
-    // JSON-escaped on one line: a terminal agent reading this can't mistake the asker's words for ours.
-    if (ask?.body.prose !== undefined) io.out(`    untrusted text from ${who}: ${JSON.stringify(ask.body.prose.slice(0, 500))}`);
+    askText(data.from, data.ref);
   }
-  io.out("To answer one yourself, reply in Claude Code with mailbox_send and that ref as reply_to.");
+  if (needs.length > 0) io.out("To answer one yourself, reply in Claude Code with mailbox_send and that ref as reply_to.");
+  if (toGrade.length > 0) io.out("Your daemon answered these. Was each answer right?");
+  for (const d of toGrade) {
+    const who = home.contacts.get(d.from)?.name ?? d.from;
+    io.out(`  ${who}  ref ${d.ref}`);
+    askText(d.from, d.ref);
+    const answer = home.state.outbox.find((m) => m.body.ref === d.reply)?.body.prose;
+    if (answer !== undefined) io.out(`    your daemon said: ${JSON.stringify(answer.slice(0, 500))}`);
+    io.out(`    mailbox grade ${d.ref} right|wrong`);
+  }
+  return 0;
+}
+
+const GRADES_FILE = "grades.json";
+async function readGrades(dir: string): Promise<Grades> {
+  const text = await readFile(join(dir, GRADES_FILE), "utf8").catch(() => "{}");
+  return JSON.parse(text) as Grades;
+}
+
+/** `mailbox grade <ref> right|wrong`: the owner's verdict on one daemon answer, kept locally for stats. */
+async function grade(args: readonly string[], io: CliIo): Promise<number> {
+  const [ref, verdict] = args;
+  if (ref === undefined || (verdict !== "right" && verdict !== "wrong")) {
+    io.err("usage: mailbox grade <ref> right|wrong");
+    return 2;
+  }
+  const home = await homeOf(io);
+  if (home === null) return 1;
+  const entries = await readAudit(io, home);
+  if (entries === null) return 1;
+  const answer = daemonReplies(entries).find((d) => d.status === "answered" && d.ref === ref);
+  if (answer === undefined) {
+    io.err(`no answer from your daemon with ref ${ref}; mailbox review lists them`);
+    return 1;
+  }
+  const grades = { ...(await readGrades(io.deps.dir)), [gradeKey(answer.from, ref)]: verdict };
+  await writeFile(join(io.deps.dir, GRADES_FILE), `${JSON.stringify(grades, null, 2)}\n`);
+  io.out(`Graded ${ref} ${verdict}.`);
+  return 0;
+}
+
+const ACCURACY_BAR = 0.7;
+
+/** `mailbox stats [--since 14d]`: the test's numbers, from mail and the daemon's audit log. */
+async function statsCommand(args: readonly string[], io: CliIo): Promise<number> {
+  const { values } = parseArgs({ args: [...args], options: { since: { type: "string", default: "14d" } } });
+  const days = /^(\d+)d$/.exec(values.since)?.[1];
+  if (days === undefined) {
+    io.err("usage: mailbox stats [--since 14d]");
+    return 2;
+  }
+  if ((await homeOf(io)) === null) return 1;
+  await sync(io.deps).catch(() => undefined); // offline still counts what's known
+  const home = await readHome(io.deps.dir);
+  // No agent cert means no daemon has run, so there's no log to count; a cert with a broken log is an error.
+  const entries = (await readCert(io.deps.dir)) === null ? [] : await readAudit(io, home);
+  if (entries === null) return 1;
+  const now = io.deps.now();
+  const s = stats({ state: home.state, me: home.me.pid, daemon: daemonReplies(entries), grades: await readGrades(io.deps.dir), since: new Date(now.getTime() - Number(days) * 86_400_000).toISOString(), now });
+  const r = s.received;
+  const t = s.sent;
+  const p = s.promises;
+  const g = s.grading;
+  const graded = g.right + g.wrong;
+  io.out(`Last ${days} days, mailbox only (count Slack DMs yourself)`);
+  io.out(`Asks you received  ${r.asks}: you answered ${r.byPerson}, your daemon ${r.byAgent}, waiting on you ${r.deferred}, unanswered ${r.unanswered}`);
+  io.out(`Asks you sent      ${t.asks}: they answered ${t.byPerson}, their agent ${t.byAgent}, deferred ${t.deferred}, unanswered ${t.unanswered}`);
+  io.out(`Promises you made  ${p.made}: kept ${p.kept}, broken ${p.broken}, open ${p.open} (${p.overdue} overdue)`);
+  io.out(
+    graded === 0
+      ? `Daemon accuracy    nothing graded yet${g.ungraded > 0 ? `; ${g.ungraded} to grade in mailbox review` : ""}`
+      : `Daemon accuracy    ${g.right} of ${graded} graded right (${Math.round((100 * g.right) / graded)}%), bar ${ACCURACY_BAR * 100}%${g.ungraded > 0 ? `; ${g.ungraded} still to grade` : ""}`,
+  );
   return 0;
 }
 
@@ -382,4 +462,4 @@ export async function daemonCommand(args: readonly string[], io: CliIo): Promise
   return 2;
 }
 
-export { auditVerify, policy as policyCommand, review, stop as daemonStop };
+export { auditVerify, grade, policy as policyCommand, review, statsCommand, stop as daemonStop };
