@@ -1,8 +1,10 @@
 # agent-mailbox
 
-Signed, encrypted, asynchronous mail between coworkers' AI agents, modelled on Erlang mailboxes. Each person has a root key. Their agents send envelopes through an untrusted relay that only ever holds ciphertext from allowlisted keys. An optional daemon answers teammates' questions from a folder you choose, under a policy you sign, and records everything it does in a signed audit log.
+Signed, encrypted, asynchronous mail between coworkers' AI agents, modelled on Erlang mailboxes. Each person has a root key. Their agents send envelopes through an untrusted relay that only ever holds ciphertext from its members. An optional daemon answers teammates' questions from a folder you choose, under a policy you sign, and records everything it does in a signed audit log.
 
 Status: experiment. macOS and Claude Code only, Node 22.18 or newer.
+
+Docs, install steps and the full relay spec: <https://agent-mailbox.netlify.app>
 
 ## You need a relay
 
@@ -100,7 +102,7 @@ It stops the daemon, removes it from login, unregisters the MCP server, removes 
 - `src/envelope.ts`: seal, verify and open envelopes. Canonical JSON, Ed25519 over a domain-separated header and ciphertext, libsodium sealed box, and a per-sender chain that tells duplicate, fork, replay, gap and chain mismatch apart.
 - `src/relay.ts`: the relay as a pure core over an injected `Store`.
 - `src/request-auth.ts`: signed reads, bound to method, host, path+query, a timestamp and a nonce.
-- `src/roots.ts`: the allowlist format and parser (`MAILBOX_ROOTS`).
+- `src/roots.ts`: the founder list format and parser (`MAILBOX_ROOTS`).
 - `src/blobs-store.ts`, `netlify/functions/relay.ts`: the Netlify shell around the core.
 - `scripts/smoke.ts`: end-to-end check of a running relay.
 - `src/client.ts`, `src/mcp-server.ts`, `src/hook.ts`, `src/cli.ts`, `src/cli-daemon.ts`, `src/claude-settings.ts`: the client, the Claude Code MCP server, the inbox hook, the `mailbox` command, and the edit that adds the hook to Claude Code's settings.
@@ -126,10 +128,14 @@ The smoke run checks write-once, retry, fork, chain, inbox listing, byte-identic
 
 ## Relay
 
-The relay deploys as a Netlify site: one function plus Netlify Blobs. Set `MAILBOX_ROOTS` to the allowlist JSON and deploy. Don't put the site behind login protection, because agents call it directly. Each person's roster entry names their relay URL. What it accepts:
+The relay deploys as a Netlify site: one function plus Netlify Blobs. It needs `MAILBOX_RELAY_KEY` (its signing seed), `MAILBOX_ROOTS` (the founders, with `"admin": true` on admins) and optionally `MAILBOX_JOIN` (who may vouch new members in). Don't put the site behind login protection, because agents call it directly. Setup is in [Run a relay](docs/run-a-relay.md); every route, encoding and error code is in [the relay protocol](docs/relay-protocol.md).
 
+Routes:
+
+- `GET /.well-known/agent-mailbox?challenge=...`: the identity probe clients run before trusting a relay.
 - `PUT /log/{pid}/{seq}`: body is the envelope, with `content-type: application/json`.
 - `GET /log/{pid}/{seq}` and `GET /inbox/{pid}?after=pid:seq,...`: both need an `Authorization: AgentMailbox …` header built by `signRequest`.
+- `POST /members`: a signed vouch, withdrawal or removal.
 
 Behaviour that differs under `netlify dev`:
 
