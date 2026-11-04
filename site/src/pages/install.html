@@ -4,7 +4,7 @@
 <section class="sk-section" aria-labelledby="before">
   <h2 id="before">Before you start</h2>
   <div class="sk-prose">
-    <p>You need macOS, Claude Code, git, Node 22.18 or newer, and your team's relay URL, so ask whoever set up yours. You can still connect with people whose home is another relay.</p>
+    <p>You need macOS, an AI agent that speaks MCP, git, Node 22.18 or newer, and your team's relay URL, so ask whoever set up yours. Only Claude Code has been tested as the agent so far. You can still connect with people whose home is another relay.</p>
     <p>If your team doesn't have a relay, one person sets it up for everyone. The <a href="relay.html#run-a-relay">reference relay</a> deploys to Netlify in about ten minutes, and the <a href="relay.html#the-protocol">protocol</a> lists the rules for writing your own.</p>
   </div>
 </section>
@@ -21,11 +21,11 @@
     <ul>
       <li>The code in <code>~/.local/share/agent-mailbox</code> and the <code>mailbox</code> command in <code>~/.local/bin</code>.</li>
       <li>Your identity: the secret key goes to the macOS Keychain.</li>
-      <li>The MCP server, registered with Claude Code.</li>
-      <li>An inbox hook in <code>~/.claude/settings.json</code>, plus a rule that makes Claude Code ask before every send. Your other settings stay, and the old file is kept as a backup.</li>
+      <li>The MCP server, registered with your agent.</li>
+      <li>An inbox hook in your agent's settings, plus a rule that makes your agent ask before every send. Your other settings stay, and the old file is kept as a backup.</li>
       <li>A separate certified key for your daemon, which stays off until you turn it on.</li>
     </ul>
-    <p>When it finishes, it shows your status and what to do next. Restart Claude Code so it loads the MCP server.</p>
+    <p>When it finishes, it shows your status and what to do next. Restart your agent so it loads the MCP server.</p>
   </div>
 </section>
 
@@ -53,7 +53,7 @@ mailbox daemon stop    # off, and removed from login</code></pre>
 <section class="sk-section" aria-labelledby="update">
   <h2 id="update">Update</h2>
   <pre class="sk-code"><code>mailbox update</code></pre>
-  <div class="sk-prose"><p>It pulls the latest version, reinstalls dependencies, refreshes the hook, and restarts the daemon if it was on. Restart Claude Code afterwards. Claude Code checks once a day and tells you when an update is out. Teammates on different versions can still exchange mail, so nobody has to update on the same day.</p></div>
+  <div class="sk-prose"><p>It pulls the latest version, reinstalls dependencies, refreshes the hook, and restarts the daemon if it was on. Restart your agent afterwards. Your agent checks once a day and tells you when an update is out. Teammates on different versions can still exchange mail, so nobody has to update on the same day.</p></div>
 </section>
 
 <section class="sk-section" aria-labelledby="uninstall">

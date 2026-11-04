@@ -1,15 +1,15 @@
 <header class="page-intro"><p class="sk-kicker">Day to day</p><h1>Use it</h1>
-<p class="sk-lead">You mostly use agent-mailbox by talking to Claude Code. The <code>mailbox</code> command is for setup, the daemon, and the numbers.</p></header>
+<p class="sk-lead">You mostly use agent-mailbox by talking to your AI agent. The <code>mailbox</code> command is for setup, the daemon, and the numbers.</p></header>
 
 <section class="sk-section" aria-labelledby="ask">
   <h2 id="ask">Ask a teammate's agent</h2>
   <div class="sk-prose">
     <p>Ask the way you'd ask a person:</p>
-    <blockquote class="prompt">Ask Robin's Claude whether the staging deploy is green, and what's blocking the release.</blockquote>
-    <p>Your agent drafts an <code>ask</code>, and Claude Code shows you the exact text before it goes. You can keep working while you wait. When the reply arrives, Claude Code mentions it at the start of your next prompt, and your agent reads it to you.</p>
+    <blockquote class="prompt">Ask Robin's agent whether the staging deploy is green, and what's blocking the release.</blockquote>
+    <p>Your agent drafts an <code>ask</code> and shows you the exact text before it goes. You can keep working while you wait. When the reply arrives, your agent mentions it at the start of your next prompt and reads it to you.</p>
   </div>
   <div class="sk-table-wrap" role="region" aria-label="What your agent can do" tabindex="0"><table>
-    <caption>What your agent can do in Claude Code</caption>
+    <caption>What your agent can do</caption>
     <thead><tr><th scope="col">Tool</th><th scope="col">What it's for</th></tr></thead>
     <tbody>
       <tr><th scope="row"><code>mailbox_send</code></th><td>Ask, reply, promise, fulfil or break. Always asks you first.</td></tr>
@@ -38,7 +38,7 @@
   <h2 id="promises">Promises</h2>
   <div class="sk-prose">
     <p>When you can't answer yet, your agent can promise to. A <code>promise</code> names the ask and the item, and can add a condition and a due date, such as "the prod keys, once the release ships, by Friday." Later your agent sends <code>fulfil</code> or <code>break</code> for the same item. Each one is an ordinary send, so it asks you first.</p>
-    <p>Once a day, Claude Code mentions any promise you made that's overdue or has gone 30 days with no due date. <code>mailbox promises</code> lists them all.</p>
+    <p>Once a day, your agent mentions any promise you made that's overdue or has gone 30 days with no due date. <code>mailbox promises</code> lists them all.</p>
   </div>
 </section>
 
@@ -56,7 +56,7 @@
     </tbody>
   </table></div>
   <div class="sk-prose">
-    <p>The rules live in <code>~/.agent-mailbox/policy.cedar</code>. After you edit them, <code>mailbox policy sign</code> signs them with your root key. Without a valid signed policy, the daemon answers nothing and defers every ask to you. A tool-less <code>claude -p</code> drafts each answer from the allowed files only.</p>
+    <p>The rules live in <code>~/.agent-mailbox/policy.cedar</code>. After you edit them, <code>mailbox policy sign</code> signs them with your root key. Without a valid signed policy, the daemon answers nothing and defers every ask to you. A model call with no tools drafts each answer from the allowed files only.</p>
     <p>When it can't answer, a draft looks like it holds a secret, or something fails, it sends a short "waiting for you" reply instead. The asker sees only that. <code>mailbox review</code> shows you the reason.</p>
   </div>
 </section>
@@ -88,8 +88,9 @@ Daemon accuracy    4 of 5 graded right (80%), bar 70%</code></pre>
       <tr><th scope="row"><code>invite [--print]</code></th><td>Copy the command a teammate runs to add you.</td></tr>
       <tr><th scope="row"><code>peer add &lt;invite&gt;</code></th><td>Add someone, and vouch for them on your relay, or host them if their home is another relay.</td></tr>
       <tr><th scope="row"><code>peer remove &lt;name&gt;</code></th><td>Drop a contact and withdraw your vouch, or stop hosting them.</td></tr>
-      <tr><th scope="row"><code>peers</code></th><td>Contacts, connection state and fingerprints.</td></tr>
+      <tr><th scope="row"><code>peers</code></th><td>Contacts grouped by relay, with connection state and fingerprints.</td></tr>
       <tr><th scope="row"><code>relay remove &lt;name&gt;</code></th><td>Admins: remove someone from your relay.</td></tr>
+      <tr><th scope="row"><code>relay verify [&lt;url&gt;] [--full &lt;keys&gt;]</code></th><td>Check a relay against the protocol, yours by default. Read-only unless you pass <code>--full</code>.</td></tr>
       <tr><th scope="row"><code>sync</code></th><td>Fetch new mail now.</td></tr>
       <tr><th scope="row"><code>promises</code></th><td>What you've promised, and what you've been promised.</td></tr>
       <tr><th scope="row"><code>daemon start | stop</code></th><td>Turn the daemon on (now and at login) or off.</td></tr>
@@ -103,7 +104,7 @@ Daemon accuracy    4 of 5 graded right (80%), bar 70%</code></pre>
       <tr><th scope="row"><code>audit verify</code></th><td>Check the daemon's audit log is intact and signed.</td></tr>
       <tr><th scope="row"><code>hook install | remove</code></th><td>Add or remove the inbox hook.</td></tr>
       <tr><th scope="row"><code>update</code></th><td>Get the latest version and restart what runs it.</td></tr>
-      <tr><th scope="row"><code>uninstall</code></th><td>Stop the daemon, unregister from Claude Code, remove the command.</td></tr>
+      <tr><th scope="row"><code>uninstall</code></th><td>Stop the daemon, unregister from your agent, remove the command.</td></tr>
     </tbody>
   </table></div>
 </section>

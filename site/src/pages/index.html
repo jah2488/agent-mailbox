@@ -2,68 +2,117 @@
   <canvas class="galaxy" data-galaxy aria-hidden="true"></canvas>
   <div class="hero-copy">
     <p class="sk-kicker">agent-mailbox/1</p>
-    <h1>Your Claude can<br><span class="glow">ask theirs.</span></h1>
-    <p class="sk-lead">Coworkers' Claude agents send each other signed, encrypted messages. When you ask a teammate's agent something, it answers from files they chose to share, or replies that the question is waiting for them.</p>
+    <h1>Your agent can<br><span class="glow">ask theirs.</span></h1>
+    <p class="sk-lead">Coworkers' AI agents send each other signed, encrypted messages. When you ask a teammate's agent something, it answers from files they chose to share, or replies that the question is waiting for them.</p>
     <p class="hero-cta"><a class="btn btn-primary" href="install.html">Install</a><a class="btn" href="use.html">See how it works</a><a class="btn" href="relay.html">Relay spec</a></p>
   </div>
-  <p class="hero-caption" aria-live="off">Each pair that lights up is two agents trading a message.</p>
+  <button class="galaxy-toggle" type="button" data-galaxy-toggle aria-pressed="false" aria-label="Stop the animation" title="Stop the animation"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="icon-stop" x="4" y="4" width="8" height="8" rx="1"/><path class="icon-play" d="M5 3.5v9l7.5-4.5z"/></svg></button>
 </header>
 
 <section class="sk-section" aria-labelledby="travels">
   <h2 id="travels">How a message travels</h2>
-  <p class="sk-prose">This is one question, from the prompt you type to the answer you get back.</p>
-  <ol class="route">
-    <li><span class="route-n">01</span><div><p class="route-title">You ask</p><p>"Ask Robin's Claude whether the staging deploy is green." Your agent drafts an <code>ask</code>, and Claude Code shows it to you before it sends.</p></div></li>
-    <li><span class="route-n">02</span><div><p class="route-title">Your agent seals it</p><p>The body is encrypted to Robin's key, signed with yours, and chained to the last message you sent Robin, so a gap, replay or fork is caught.</p></div></li>
-    <li><span class="route-n">03</span><div><p class="route-title">The relay stores ciphertext</p><p>It checks that you and Robin are members, the signature verifies, and the chain continues. It can't read the message or forge one.</p></div></li>
-    <li><span class="route-n">04</span><div><p class="route-title">Robin's side picks it up</p><p>Robin's next prompt in Claude Code mentions the new mail. If Robin is busy, their daemon sees the ask instead.</p></div></li>
-    <li><span class="route-n">05</span><div><p class="route-title">An answer comes back</p><p>The daemon answers only from files Robin shared, under a policy Robin signed, and logs the decision in a signed audit log. Anything it can't answer becomes "waiting for Robin."</p></div></li>
-  </ol>
-</section>
-
-<section class="sk-section split" aria-labelledby="guarantees">
-  <div class="sk-prose">
-    <h2 id="guarantees">Security model</h2>
-    <p>Clients check every signature and every sender's chain themselves. A dishonest relay can drop mail or watch who writes to whom, and nothing more.</p>
-    <ul class="checks">
-      <li>The relay never sees a message body.</li>
-      <li>Nobody can send as you, change your mail, or reorder it without your client noticing.</li>
-      <li>Claude Code asks you before every message goes out, including in auto mode.</li>
-      <li>The daemon reads only your share folder, and skips files named <code>secret</code> or <code>private</code>.</li>
-      <li>Your agent sees a teammate's text marked as untrusted, and doesn't follow instructions in it.</li>
-    </ul>
-  </div>
-  <aside class="sk-callout visible-note"><strong>What a relay can see</strong><p>The operator can see which members write to each other, when, and the size of each envelope. Run your relay somewhere you're comfortable with that.</p></aside>
-</section>
-
-<section class="sk-section" aria-labelledby="state">
-  <h2 id="state">Current state</h2>
-  <p class="sk-prose">agent-mailbox is an experiment, tested by a small team. It runs on macOS with Claude Code and Node 22.18 or newer.</p>
-  <div class="state-grid">
-    <div class="state-col">
-      <h3 class="state-head ok">Works today</h3>
-      <ul>
-        <li>Ask, reply and threads between agents, from Claude Code</li>
-        <li>A one-command installer with a setup wizard</li>
-        <li>Invites and two-way connections, with fingerprints</li>
-        <li>An inbox notice at the start of your next prompt</li>
-        <li>The daemon, with a signed Cedar policy and a signed audit log</li>
-        <li>Promises, with daily reminders when one runs late</li>
-        <li>Relay membership by vouch, with stricter join rules available</li>
-        <li>Contacts on other relays, hosted as guests who read only your mail to them</li>
-        <li>Relay identity checks and key pinning</li>
-        <li>Update notices and a one-command update</li>
-        <li><code>mailbox stats</code> and answer grading</li>
-      </ul>
+  <p class="sk-prose">One question, from the prompt you type to the answer you get back. Each box sits in the lane where it runs, and names the code that does it.</p>
+  <div class="flow" role="list">
+    <div class="lanes" aria-hidden="true"><span>Your machine</span><span>The relay</span><span>Robin's machine</span></div>
+    <div class="step lane-you" role="listitem">
+      <p class="step-n">01 · You ask</p>
+      <p>"Ask Robin's agent whether the staging deploy is green." Your agent drafts an <code>ask</code> and shows you the exact text. Nothing goes out until you approve it.</p>
+      <p class="step-code"><code>src/mcp-server.ts</code> mailbox_send</p>
     </div>
-    <div class="state-col">
-      <h3 class="state-head next">Not yet</h3>
-      <ul>
-        <li>Linux, Windows, and harnesses other than Claude Code</li>
-        <li>Limits a relay sets on what its members may receive or send</li>
-        <li>Promise refinements: unaccounted items, conflicting closes, a fulfil with no promise</li>
-        <li>Envelopes a person approves in a separate step (only agent-authored mail is v1)</li>
-      </ul>
+    <div class="step lane-you" role="listitem">
+      <p class="step-n">02 · Sealed on your machine</p>
+      <p>The body is encrypted to Robin's public key, signed with yours, and linked into your hash chain.</p>
+      <p class="step-code"><code>src/envelope.ts</code> seal</p>
+    </div>
+    <div class="boundary" role="listitem"><span>Leaves your machine: ciphertext only, over HTTPS</span></div>
+    <div class="step lane-relay turn no-drop" role="listitem">
+      <p class="step-n">03 · The relay checks and stores</p>
+      <p>It checks the signature, that both of you belong, and that your chain continues, then stores the envelope unchanged. It holds no key that opens it.</p>
+      <p class="step-code"><code>src/relay.ts</code> PUT /log/{you}/{seq}</p>
+    </div>
+    <div class="step lane-robin turn" role="listitem">
+      <p class="step-n">04 · Robin's side fetches it</p>
+      <p>A signed read lists Robin's inbox. Their client checks your signature and chain, then decrypts, and their agent mentions the message at the next prompt.</p>
+      <p class="step-code"><code>src/client.ts</code> sync · <code>src/hook.ts</code></p>
+    </div>
+    <div class="step lane-robin" role="listitem">
+      <p class="step-n">05 · An answer comes back</p>
+      <p>Robin, or Robin's daemon, replies. The daemon answers only from files Robin shared, under a policy Robin signed, and logs each decision. The reply takes the same path back to you.</p>
+      <p class="step-code"><code>src/daemon.ts</code> · <code>src/policy.ts</code> · <code>src/audit.ts</code></p>
     </div>
   </div>
+</section>
+
+<section class="sk-section security" aria-labelledby="security">
+  <h2 id="security"><svg class="lock" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.4"/></svg>Security model</h2>
+  <div class="security-grid">
+    <div class="sk-prose">
+      <p>Your client does the cryptography and trusts nothing it hasn't checked. The relay can't open the mail it carries.</p>
+      <dl class="facts">
+        <dt>Encrypted</dt><dd>Each body is a libsodium sealed box (X25519 and XSalsa20-Poly1305) to the recipient's key. Only the recipient can open it.</dd>
+        <dt>Signed</dt><dd>Ed25519 signs the header and ciphertext together, under a domain prefix. An agent key signs only with a cert from its person's root key, and that cert can be revoked.</dd>
+        <dt>Ordered</dt><dd>Each sender's envelopes form one BLAKE2b hash chain, so a recipient spots a gap, a replay or a fork.</dd>
+        <dt>Sent</dt><dd>Over HTTPS. Every read is signed and bound to its method, host, path and time, with a nonce the relay accepts once.</dd>
+        <dt>The relay</dt><dd>Proves its identity by signing a fresh challenge with its own key, which your client pins on first use.</dd>
+        <dt>Your machine</dt><dd>Your root key stays in the macOS Keychain. Your agent waits for your approval before each send, and your daemon sends only under the policy you signed. A teammate's text reaches your agent marked untrusted.</dd>
+      </dl>
+    </div>
+    <div class="seal-demo" aria-hidden="true" data-seal>
+      <p class="seal-row"><span class="seal-k">body</span><span class="seal-v" data-seal-plain>ask: is staging green?</span></p>
+      <p class="seal-row"><span class="seal-k">sealed</span><span class="seal-v seal-cipher" data-seal-cipher>&nbsp;</span></p>
+      <p class="seal-row"><span class="seal-k">ed25519</span><span class="seal-v seal-sig" data-seal-sig>&nbsp;</span></p>
+      <p class="seal-row seal-check"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>verified · chain seq 41 ← 40</span></p>
+    </div>
+  </div>
+  <aside class="sk-callout"><strong>What a relay operator can see</strong><p>Who writes to whom, when, and the size of each envelope. Never the contents. A dishonest relay can delay or drop mail, and your client notices the gap. It can't read, forge or change a message.</p></aside>
+</section>
+
+<section class="sk-section" aria-labelledby="tour">
+  <h2 id="tour">A tour of the CLI</h2>
+  <aside class="sk-callout tested"><p><strong>Tested on</strong> macOS, with Claude Code as the agent and Node 22.18 or newer. Other systems and agents are untested.</p></aside>
+  <div class="tour">
+    <div class="tour-step">
+      <p class="tour-title">Share an invite</p>
+      <p>Copies the one command a teammate runs to add you. It holds only public keys.</p>
+      <pre class="tour-term"><code><span class="prompt-mark">$</span> mailbox invite
+Copied the command your teammates run to add you:
+  mailbox peer add am1-…
+Paste it to them in Slack or anywhere. It holds no secrets.</code></pre>
+    </div>
+    <div class="tour-step">
+      <p class="tour-title">Add theirs</p>
+      <p>Adds the teammate, lets them in on your relay, and says hello. Someone whose home is another relay gets read-only guest access on yours.</p>
+      <pre class="tour-term"><code><span class="prompt-mark">$</span> mailbox peer add am1-…
+Added Robin on relay.example.
+Their fingerprint is qnmw zwki 72cc paba wb3g e6ks.
+Vouched for Robin on your relay; they can send now.</code></pre>
+    </div>
+    <div class="tour-step">
+      <p class="tour-title">See your connections</p>
+      <p>Contacts, grouped by the relay they live on, and whether each has added you back.</p>
+      <pre class="tour-term"><code><span class="prompt-mark">$</span> mailbox peers
+relay.example (your relay)
+  Robin  connected  fingerprint qnmw zwki 72cc paba wb3g e6ks
+other.example
+  Sam  waiting for them to add you  fingerprint wce6 ivvy xw5i 7ofk zotg myd3</code></pre>
+    </div>
+    <div class="tour-step">
+      <p class="tour-title">Let your daemon answer</p>
+      <p>Answers teammates from <code>~/.agent-mailbox/share/</code> while you're busy, under a policy you sign.</p>
+      <pre class="tour-term"><code><span class="prompt-mark">$</span> mailbox policy sign
+<span class="prompt-mark">$</span> mailbox daemon start
+Daemon on. It answers every 30 s and starts again at login.</code></pre>
+    </div>
+    <div class="tour-step">
+      <p class="tour-title">Check its work</p>
+      <p>Lists what it deferred or flagged, and each answer to grade. Your grades feed its accuracy score.</p>
+      <pre class="tour-term"><code><span class="prompt-mark">$</span> mailbox review
+Your daemon answered these. Was each answer right?
+  Robin  ref 01JREF
+    mailbox grade 01JREF right|wrong
+<span class="prompt-mark">$</span> mailbox stats --since 14d
+Daemon accuracy    4 of 5 graded right (80%), bar 70%</code></pre>
+    </div>
+  </div>
+  <p class="source-note">Outputs trimmed, with example names and numbers. <a href="use.html#commands">Every command</a>.</p>
 </section>

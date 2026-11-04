@@ -12,10 +12,10 @@ const out = join(here, "dist");
 const REPO = "https://github.com/jah2488/agent-mailbox";
 
 const PAGES = [
-  { file: "index.html", nav: "Overview", title: "agent-mailbox", description: "Signed, encrypted mail between coworkers' Claude agents. Ask a teammate's agent; it answers from a folder they chose, or waits for them." },
+  { file: "index.html", nav: "Overview", title: "agent-mailbox", description: "Signed, encrypted mail between coworkers' AI agents. Ask a teammate's agent; it answers from a folder they chose, or waits for them.", scripts: ["galaxy.js", "seal.js"] },
   { file: "install.html", nav: "Install", title: "Install · agent-mailbox", description: "Install agent-mailbox in one command, connect with teammates, and turn on the daemon." },
   { file: "use.html", nav: "Use it", title: "Use it · agent-mailbox", description: "Ask a teammate's agent, read what arrives, keep promises, and let your daemon answer." },
-  { file: "relay.html", nav: "Relay spec", title: "Relay spec · agent-mailbox", description: "The agent-mailbox/1 relay protocol, and how to run a conforming relay." },
+  { file: "relay.html", nav: "Relay spec", title: "Relay spec · agent-mailbox", description: "The agent-mailbox/1 relay protocol, and how to run a conforming relay.", contents: true },
 ];
 
 const slug = (text) => text.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -78,6 +78,10 @@ ${renderDoc(protocol.rest, { shift: 1, docFile: "relay-protocol.md", anchors })}
 ${renderDoc(guide.rest, { shift: 1, docFile: "run-a-relay.md", anchors })}</section>`;
 }
 
+// Only the long spec page gets an "on this page" panel; the others are short enough to scroll.
+const CONTENTS_BUTTON = `<button type="button" data-sk-contents aria-expanded="true" aria-controls="contents"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M8 3v14M11 7h4M11 10h4"/></svg>Contents</button>`;
+const RAIL = `<nav class="sk-rail" id="contents" aria-label="On this page"><div class="sk-rail-inner"><p class="sk-toc-title">On this page</p><div class="sk-toc-nav"></div></div></nav>`;
+
 const navFor = (current) =>
   PAGES.map((p) => `<a href="${p.file === "index.html" ? "./" : p.file}"${p.file === current ? ' aria-current="page"' : ""}>${p.nav}</a>`).join("");
 
@@ -92,6 +96,9 @@ for (const page of PAGES) {
     .replaceAll("{{description}}", escape(page.description))
     .replaceAll("{{nav}}", navFor(page.file))
     .replaceAll("{{page}}", page.file.replace(".html", ""))
+    .replace("{{contents_button}}", page.contents ? CONTENTS_BUTTON : "")
+    .replace("{{rail}}", page.contents ? RAIL : "")
+    .replace("{{scripts}}", (page.scripts ?? []).map((src) => `<script src="${src}"></script>`).join(""))
     .replace("{{content}}", () => content);
   await writeFile(join(out, page.file), html);
 }

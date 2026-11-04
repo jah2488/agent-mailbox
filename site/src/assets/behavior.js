@@ -345,7 +345,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    initTheme();
+    // One theme: the page is night-only so the galaxy blends into it. (Kit theme switching is unused here.)
     initToc();
     initContents();
     initTables(document);
