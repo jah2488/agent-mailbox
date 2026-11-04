@@ -23,6 +23,7 @@ import {
 } from "./mailbox.ts";
 import { ledger, type Commitment } from "./promises.ts";
 import { signEvent, type MembershipEvent } from "./membership.ts";
+import { PROTOCOL_VERSION, supports, VERSION_HEADER } from "./protocol-version.ts";
 import { checkRelay } from "./relay-check.ts";
 import { rootEntry } from "./roots.ts";
 import { signRequest, type RequestSigner } from "./request-auth.ts";
@@ -103,7 +104,9 @@ async function describeFailure(res: Response): Promise<string> {
 
 /** Every relay call goes through here, so none can hold the home lock indefinitely. */
 function relayFetch(deps: ClientDeps, url: string, init: RequestInit = {}): Promise<Response> {
-  return deps.fetch(url, { ...init, signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS) });
+  const headers = new Headers(init.headers);
+  headers.set(VERSION_HEADER, PROTOCOL_VERSION);
+  return deps.fetch(url, { ...init, headers, signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS) });
 }
 
 /** Puts every undelivered message on my home relay, oldest first, stopping at the first failure. */
@@ -365,6 +368,8 @@ export async function membership(deps: ClientDeps, kind: MembershipEvent["kind"]
   if (root === null) return { ok: false, error: "no_root_key" };
   const relay = await checkRelay(deps, home.me.relay);
   if (!relay.ok) return { ok: false, error: relay.error };
+  // Guests arrived in protocol 1.1; an older relay would refuse the event as malformed.
+  if ((kind === "host" || kind === "unhost") && !supports(relay.version, "1.1")) return { ok: false, error: "relay_too_old" };
   const event = { v: 1 as const, kind, relay: new URL(home.me.relay).host, member: rootEntry(member), by: home.me.pid, ts: deps.now().toISOString() };
   try {
     const res = await relayFetch(deps, `${home.me.relay}/members`, {

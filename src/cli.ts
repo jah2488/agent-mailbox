@@ -6,7 +6,9 @@ import { hasAskRule, hasHook, withHook, withoutAskRule, withoutHook } from "./cl
 import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, grade, policyCommand, review, statsCommand } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
+import { PROTOCOL_VERSION } from "./protocol-version.ts";
 import { checkRelay, readPins } from "./relay-check.ts";
+import { fullChecks, readOnlyChecks, readTestKeys } from "./relay-verify.ts";
 import { membership, promises, send, sync, type ClientDeps, type MembershipResult, type NamedCommitment } from "./client.ts";
 import { ledger } from "./promises.ts";
 import { heardFrom } from "./mailbox.ts";
@@ -53,6 +55,7 @@ const USAGE = [
   "  peer add <invite>                    add someone from their invite (and vouch for or host them on your relay)",
   "  peer remove <name>                   drop a contact and withdraw your vouch for them",
   "  relay remove <name>                  admins: remove someone from your relay",
+  "  relay verify [<url>] [--full <keys>]  check a relay against the protocol (yours by default)",
   "  peers                                list contacts by relay, with fingerprints",
   "  sync                                 fetch new mail now",
   "  promises                             what you've promised teammates, and what they've promised you",
@@ -272,6 +275,7 @@ function joinMessage(name: string, kind: "vouch" | "host", result: MembershipRes
   if (result.error === "admins_only") return `Your relay only lets admins add people. Ask an admin to run ${name}'s invite.`;
   if (result.error === "join_closed") return `Your relay's operator adds people. Send them ${name}'s invite.`;
   if (result.error === "removed_by_admin") return `An admin removed ${name} from your relay; only an admin can bring them back.`;
+  if (result.error === "relay_too_old") return `Your relay runs a protocol version from before contacts on other relays, so ${name} can't read what you send yet. Ask its operator to update it.`;
   return `Couldn't ${kind === "host" ? "host" : "vouch for"} ${name} on your relay (${result.error}).`;
 }
 
@@ -319,6 +323,27 @@ async function peerRemove(args: readonly string[], io: CliIo): Promise<number> {
         : `Withdrew your vouch; ${them.name} can no longer use your relay.`,
   );
   return 0;
+}
+
+/**
+ * Checks a relay (mine unless named) against the protocol. The default run
+ * only makes requests a conforming relay refuses; --full also writes, as
+ * throwaway founders from `node scripts/smoke.ts keys <dir>`.
+ */
+async function relayVerify(args: readonly string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({ args: [...args], allowPositionals: true, options: { full: { type: "string" } } });
+  const named = positionals[0] === undefined ? (await readHome(io.deps.dir).catch(() => null))?.me.relay : normaliseRelay(positionals[0]);
+  if (named === undefined || named === null) {
+    io.err(positionals[0] === undefined ? "usage: mailbox relay verify [<url>] [--full <keys-dir>]" : "relay must be https (or http on localhost)");
+    return 2;
+  }
+  io.out(`Checking ${named} against agent-mailbox ${PROTOCOL_VERSION}${values.full === undefined ? " (read-only)" : ", with writes"}:`);
+  const checks = values.full === undefined ? await readOnlyChecks(io.deps.fetch, named) : await fullChecks(io.deps.fetch, named, readTestKeys(values.full));
+  const s = styles(io.color);
+  for (const c of checks) io.out(c.pass ? `${s.accent("✓")} ${c.label}${c.detail === undefined ? "" : s.dim(`  (${c.detail})`)}` : `✗ ${c.label}: ${c.detail ?? "failed"}`);
+  const passed = checks.filter((c) => c.pass).length;
+  io.out(`${passed} of ${checks.length} checks passed.`);
+  return passed === checks.length ? 0 : 1;
 }
 
 /** An admin removing someone from the relay outright, whoever vouched for them. */
@@ -595,6 +620,7 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return hookCommand(rest[0], io);
     case "relay":
       if (rest[0] === "remove") return relayRemove(rest.slice(1), io);
+      if (rest[0] === "verify") return relayVerify(rest.slice(1), io);
       break;
     case "uninstall":
       return uninstall(io);

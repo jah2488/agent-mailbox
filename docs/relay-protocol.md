@@ -2,7 +2,21 @@
 
 A relay stores signed, encrypted envelopes and hands them to the people they're addressed to. It never sees plaintext, and it can't forge, edit or silently reorder mail: clients check every signature and every sender's chain themselves. What a relay controls is availability (whether mail arrives) and metadata (who writes to whom, and when).
 
-The reference implementation is `src/relay.ts`. Its tests (`src/relay.test.ts`) are the conformance suite.
+The reference implementation is `src/relay.ts`. Its tests (`src/relay.test.ts`) are the conformance suite, and `mailbox relay verify` runs the same kind of checks against a live relay (see What clients enforce).
+
+## Versions
+
+This document describes protocol **1.1**. `agent-mailbox/1` names the major version; the version field gives major.minor.
+
+| Version | What changed | Fixed a security hole |
+|---|---|---|
+| 1.0 | The original protocol: identity, writes, signed reads, membership by vouch | no |
+| 1.1 | Signed `version` in the identity reply, the `agent-mailbox-version` request header, guests (`host` and `unhost`) | no |
+
+Rules for every change from here on:
+- **Minor bump** for anything an older peer can live without. Peers on different minors talk at the older one, and each tells its person when the other is newer or older.
+- **Major bump** for anything that breaks the wire format. Different majors don't talk.
+- **Security fix:** a version whose release fixes a hole is added to `SECURITY_FIXES` in `src/protocol-version.ts`, on clients and relays alike. That version becomes a hard floor: clients refuse a relay below it, and the relay refuses a client below it with `426`. This is the only case where versions must match.
 
 ## Encodings
 
@@ -37,6 +51,10 @@ Every relay has an Ed25519 key, kept as a 32-byte seed in `MAILBOX_RELAY_KEY`.
 ```
 
 `s` is an Ed25519 signature, by `relay_key`, over `agent-mailbox/v1/relay\n` followed by the canonical JSON (sorted keys, no whitespace) of the other four fields. A relay with no key answers `503 {"error":"relay_has_no_key"}`.
+
+Since 1.1 the reply also carries `"version": "<major.minor>"` and `"sv": "<signature>"`, where `sv` signs the same prefix and the canonical JSON of the four fields plus `version`. `s` is unchanged, so clients from before 1.1 still verify the reply. A reply with neither field speaks 1.0. A reply with one but not the other, or an `sv` that doesn't verify, is refused. Once a client has pinned a relay at a version, it refuses a later reply from that relay that carries no version, because dropping both fields would otherwise pass a relay off as older than it is.
+
+Since 1.1 every other request carries `agent-mailbox-version: <major.minor>`. A request without it counts as 1.0. The relay answers `426 {"error":"upgrade_required","min_version":"<floor>"}` to a client below its security floor, and `400 {"error":"bad_version"}` to an unreadable version. The identity request is never refused for its version, so an old client can still learn which relay it reached and why it's being refused.
 
 ## Writing
 
@@ -178,8 +196,10 @@ Responses:
 Refused when the relay:
 
 - doesn't answer the identity request with a valid description for its own host and the client's fresh challenge;
-- speaks a protocol other than `agent-mailbox/1`;
+- speaks a protocol other than `agent-mailbox/1`, or a version below the client's security floor;
 - serves an inbox read that carries no signature;
 - answers with a different key than the one the client pinned the first time it used that relay, or than the key an invite named for it.
+
+`mailbox relay verify <url>` checks a relay from the outside and prints one line per check. By default it sends only requests a conforming relay must refuse (unsigned and non-member reads, a non-member's envelope and membership event, a bad challenge, a wrong content type, an unknown route and method), plus the identity request, so it stores nothing and is safe against a production relay. `--full <keys-dir>` also writes and reads real envelopes and races concurrent writes. It needs three throwaway identities, from `node scripts/smoke.ts keys <dir>`, whose `roots.json` the operator has added to `MAILBOX_ROOTS`.
 
 These checks catch an incompatible, misconfigured, swapped or lookalike relay. No check can prove a relay's operator is honest. The envelope design keeps a dishonest relay from reading or changing mail.

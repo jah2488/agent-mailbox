@@ -9,7 +9,10 @@ import { contact } from "./roster.ts";
 import { take, thread } from "./mailbox.ts";
 import { issueCert } from "./cert.ts";
 import { agentIdentity } from "./identity.ts";
-import { relayKeyFromSeed, type RelayKey } from "./relay-identity.ts";
+import { canonicalize } from "./canonical.ts";
+import { PROTOCOL_VERSION } from "./protocol-version.ts";
+import { describeRelay, relayKeyFromSeed, type RelayDescription, type RelayKey } from "./relay-identity.ts";
+import sodium from "./sodium.ts";
 import { daemonOf, TEST_RELAY_KEY, world } from "./test-world.ts";
 
 test("alice asks bob by name; bob syncs and takes exactly her message", async () => {
@@ -287,4 +290,44 @@ test("a corrupt relays.json refuses relays instead of quietly trusting whatever 
   const synced = await sync(bob.deps);
   assert.match(synced.errors.join("\n"), /relays\.json is unreadable/);
   assert.equal(await readFile(join(bob.deps.dir, "relays.json"), "utf8"), "{ not json", "left for the user to fix");
+});
+
+// ---- Protocol versions ----
+
+/** The test relay's own signed description, with fields removed or a version of our choosing signed in. */
+function description(req: Request, change: (d: RelayDescription) => Record<string, unknown>): Response {
+  const url = new URL(req.url);
+  return Response.json(change(describeRelay(TEST_RELAY_KEY, url.host, url.searchParams.get("challenge") ?? "")));
+}
+const ageRelayPins = async (dir: string) => {
+  const pins = JSON.parse(await readFile(join(dir, "relays.json"), "utf8")) as Record<string, { checkedAt: string }>;
+  await writeFile(join(dir, "relays.json"), JSON.stringify(Object.fromEntries(Object.entries(pins).map(([url, pin]) => [url, { ...pin, checkedAt: new Date(0).toISOString() }]))));
+};
+
+test("every request to a relay names this client's protocol version", async () => {
+  const seen = new Set<string | null>();
+  const { alice, bob } = await world({ intercept: (req) => void (new URL(req.url).pathname !== "/.well-known/agent-mailbox" && seen.add(req.headers.get("agent-mailbox-version"))) });
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await sync(bob.deps);
+  assert.deepEqual([...seen], [PROTOCOL_VERSION]);
+});
+
+test("the relay's version is pinned, and a pinned relay that later answers with no version is refused", async () => {
+  let strip = false;
+  const { bob } = await world({ intercept: (req) => (strip && new URL(req.url).pathname === "/.well-known/agent-mailbox" ? description(req, ({ version: _v, sv: _sv, ...legacy }) => legacy) : undefined) });
+  await sync(bob.deps);
+  const pins = JSON.parse(await readFile(join(bob.deps.dir, "relays.json"), "utf8")) as Record<string, { version?: string }>;
+  assert.equal(pins["https://relay.test"]?.version, PROTOCOL_VERSION);
+  strip = true;
+  await ageRelayPins(bob.deps.dir);
+  assert.match((await sync(bob.deps)).errors.join("\n"), /relay\.test: answered without the version it signed before; refusing it/);
+});
+
+test("a relay below this client's security floor is refused", async () => {
+  const { bob } = await world({ intercept: (req) => (new URL(req.url).pathname === "/.well-known/agent-mailbox" ? description(req, (d) => {
+    const { version: _v, sv: _sv, s: _s, ...body } = d;
+    const sign = (fields: Record<string, string>) => sodium.to_base64(sodium.crypto_sign_detached(new TextEncoder().encode("agent-mailbox/v1/relay\n" + canonicalize(fields)), TEST_RELAY_KEY.secretKey), sodium.base64_variants.URLSAFE_NO_PADDING);
+    return { ...body, s: sign(body), version: "0.9", sv: sign({ ...body, version: "0.9" }) };
+  }) : undefined) });
+  assert.match((await sync(bob.deps)).errors.join("\n"), /relay\.test: .*speaks agent-mailbox 0\.9, below 1\.0, which fixed a security hole/);
 });

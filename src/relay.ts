@@ -3,6 +3,7 @@ import { CHALLENGE_PATTERN, describeRelay, WELL_KNOWN_PATH, type RelayKey } from
 import { applyEvent, checkEvent, isAdmitted, isGuest, type JoinRule, type MemberRecord } from "./membership.ts";
 import { readRootEntry } from "./roots.ts";
 import type { Peer, Pid } from "./identity.ts";
+import { compareVersions, parseVersion, securityFloor, UNVERSIONED, VERSION_HEADER } from "./protocol-version.ts";
 import { verifyRequest } from "./request-auth.ts";
 import sodium from "./sodium.ts";
 
@@ -45,6 +46,8 @@ export type RelayDeps = {
   readonly admins?: ReadonlySet<Pid>;
   /** At most this many membership records, so one member can't grow storage without bound. */
   readonly memberCap?: number;
+  /** The oldest client version served. Default: the newest version in SECURITY_FIXES. */
+  readonly securityFloor?: string;
 };
 
 const MEMBERS = "members/";
@@ -144,8 +147,21 @@ const OUTER_STATUS: Readonly<Record<OuterError, number>> = {
   bad_signature: 401,
 };
 
+/** A client below the floor is refused before anything else; one that sends no version predates versioning. */
+function belowFloor(req: Request, deps: RelayDeps): Response | null {
+  const floor = deps.securityFloor ?? securityFloor();
+  const sent = req.headers.get(VERSION_HEADER) ?? UNVERSIONED;
+  if (parseVersion(sent) === null) return refuse(400, "bad_version");
+  return compareVersions(sent, floor) < 0 ? reply(426, { error: "upgrade_required", min_version: floor }) : null;
+}
+
 export async function handle(req: Request, given: RelayDeps): Promise<Response> {
   const url = new URL(req.url);
+  // The identity probe stays open to every client, so an old one can still learn which relay this is and why it's refused.
+  if (url.pathname !== WELL_KNOWN_PATH) {
+    const refused = belowFloor(req, given);
+    if (refused !== null) return refused;
+  }
   if (url.pathname === "/members") {
     if (req.method !== "POST") return refuse(405, "method_not_allowed");
     return postMember(req, url, given);

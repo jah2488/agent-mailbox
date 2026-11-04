@@ -11,7 +11,8 @@ import { readHome } from "./home.ts";
 import { generateIdentity, pidOf } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import sodium from "./sodium.ts";
-import { world, type Person } from "./test-world.ts";
+import { describeRelay } from "./relay-identity.ts";
+import { TEST_RELAY_KEY, world, type Person } from "./test-world.ts";
 
 const b64 = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.ORIGINAL);
 const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.ORIGINAL);
@@ -610,4 +611,35 @@ test("mailbox peers groups contacts under their relay, yours first", async () =>
   assert.equal(await run(["peers"], io), 0);
   const out = io.lines.join("\n");
   assert.match(out, /^relay\.test \(your relay\)\n {2}Alice\s[\s\S]*\nother\.test\n {2}Friend\s.*waiting for them to add you/);
+});
+
+test("on a relay from before protocol 1.1, adding someone from another relay explains why they can't read yet", async () => {
+  const legacy = (req: Request) => {
+    const url = new URL(req.url);
+    if (url.origin !== "https://relay.test" || url.pathname !== "/.well-known/agent-mailbox") return undefined;
+    const { version: _v, sv: _sv, ...old } = describeRelay(TEST_RELAY_KEY, url.host, url.searchParams.get("challenge") ?? "");
+    return Response.json(old);
+  };
+  const { bob, friend } = await world({ join: { kind: "any-member" }, intercept: legacy });
+  const bobs = ioFor(bob);
+  assert.equal(await run(await inviteOf(friend), bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /protocol version from before contacts on other relays/);
+});
+
+test("mailbox relay verify checks your relay against the protocol and exits 0 when it conforms", async () => {
+  const { bob } = await world({ join: { kind: "any-member" } });
+  const io = ioFor(bob);
+  assert.equal(await run(["relay", "verify"], io), 0, io.errors.join("\n") + io.lines.join("\n"));
+  const out = io.lines.join("\n");
+  assert.match(out, /^Checking https:\/\/relay\.test against agent-mailbox 1\.1/);
+  assert.match(out, /✓ it proves its identity, signed for this host and a fresh challenge  \(protocol 1\.1/);
+  assert.match(out, /✓ an unsigned inbox read is refused \(401 unauthorized\)/);
+  assert.match(out, /\d+ of \d+ checks passed\.$/);
+});
+
+test("mailbox relay verify names each failed check and exits 1", async () => {
+  const { bob } = await world({ intercept: (req) => (req.method === "PUT" ? Response.json({}, { status: 201 }) : undefined) });
+  const io = ioFor(bob);
+  assert.equal(await run(["relay", "verify", "https://relay.test"], io), 1);
+  assert.match(io.lines.join("\n"), /✗ an envelope from a non-member is refused \(403 unknown_sender\): got 201, want 403 unknown_sender/);
 });

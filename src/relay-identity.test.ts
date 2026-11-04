@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PROTOCOL_VERSION } from "./protocol-version.ts";
 import { describeRelay, RELAY_PROTOCOL, relayKeyFromSeed, verifyRelayDescription } from "./relay-identity.ts";
 
 const relay = relayKeyFromSeed("A".repeat(43));
@@ -31,4 +32,21 @@ test("a description whose signature doesn't match its key, or that speaks anothe
 test("relay keys come from a 32-byte seed, so an operator stores one short secret", () => {
   assert.throws(() => relayKeyFromSeed("too-short"), /32-byte seed/);
   assert.equal(relayKeyFromSeed("A".repeat(43)).publicKey, relay.publicKey, "the same seed always gives the same key");
+});
+
+test("a description carries a signed version; one from before versioning reads as 1.0 and still verifies", () => {
+  const description = describeRelay(relay, "relay.example", CHALLENGE);
+  const verified = verifyRelayDescription(description, "relay.example", CHALLENGE);
+  assert.ok(verified.ok);
+  assert.equal(verified.version, PROTOCOL_VERSION);
+  const { version: _v, sv: _sv, ...legacy } = description;
+  const old = verifyRelayDescription(legacy, "relay.example", CHALLENGE);
+  assert.ok(old.ok, "the legacy signature alone still verifies");
+  assert.equal(old.version, "1.0");
+});
+
+test("a version the relay didn't sign is refused, so nobody in between can talk a relay down to an older version", () => {
+  const description = describeRelay(relay, "relay.example", CHALLENGE);
+  assert.deepEqual(verifyRelayDescription({ ...description, version: "1.0" }, "relay.example", CHALLENGE), { ok: false, error: "bad version signature" });
+  assert.deepEqual(verifyRelayDescription({ ...description, sv: undefined }, "relay.example", CHALLENGE), { ok: false, error: "bad version signature" });
 });

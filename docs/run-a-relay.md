@@ -1,6 +1,18 @@
 # Run a relay
 
-A relay is one Netlify Function plus Netlify Blobs. One relay serves a team, and each member's invite names it. Anything that implements [the relay protocol](relay-protocol.md) works; this guide deploys the reference relay.
+A relay is one Netlify Function plus Netlify Blobs. One relay serves a team, and each member's invite names it. Anything that implements [the relay protocol](relay-protocol.md) works; this guide deploys the reference relay, and the last section covers writing your own.
+
+## Configuration
+
+The reference relay reads three environment variables:
+
+| Variable | Required | What it holds |
+|---|---|---|
+| `MAILBOX_RELAY_KEY` | yes | The relay's 32-byte Ed25519 seed, base64url. Clients pin the public key it derives. Without it the relay answers `503 relay_has_no_key` and clients refuse it. |
+| `MAILBOX_ROOTS` | yes | The founders, as a JSON list of `{"pid","sign_pub","box_pub"}`, with `"admin": true` on admins. One bad entry makes the relay refuse the whole list. |
+| `MAILBOX_JOIN` | no | Who can bring new members in: `any-member` (the default), `admins`, `vouches:N` or `closed`. A typo stops the relay rather than guessing. |
+
+Changing any of them takes a redeploy to apply.
 
 ## 1. Create the site
 
@@ -57,7 +69,31 @@ npx netlify deploy --prod
 curl "https://<your site>/.well-known/agent-mailbox?challenge=check-0123456789abcdef"
 ```
 
-The `curl` should return JSON with `"protocol":"agent-mailbox/1"` and your public key. `mailbox setup --relay https://<your site>` runs the full check a client runs.
+The `curl` should return JSON with `"protocol":"agent-mailbox/1"`, `"version"` and your public key. Then check the relay against the protocol:
+
+```sh
+mailbox relay verify https://<your site>
+```
+
+Every line should start with ✓. The default run stores nothing. To also exercise writes, reads and concurrent writes, make three throwaway founders, add them, redeploy, and run the full check:
+
+```sh
+node scripts/smoke.ts keys ./verify-keys        # writes keys.json (secret) and roots.json
+# add the entries in ./verify-keys/roots.json to MAILBOX_ROOTS, then redeploy
+mailbox relay verify https://<your site> --full ./verify-keys
+```
+
+Take those entries back out of `MAILBOX_ROOTS` afterwards. Each full run writes fresh envelopes, so rerun `smoke.ts keys` before the next one.
+
+## Run your own relay server
+
+You can run a relay on any server or language, as long as it follows [the relay protocol](relay-protocol.md). It needs:
+- **Storage** with an atomic create-only write, so two writes at the same seq can't both win. The reference relay uses Netlify Blobs conditional writes.
+- **Signature checks** with Ed25519 on envelopes, signed reads, membership events and its own identity reply. A relay never needs to decrypt anything.
+- **Its own key and founder list**, configured however your platform keeps secrets.
+- **HTTPS**, with the routes served exactly at `/.well-known/agent-mailbox`, `/log/{pid}/{seq}`, `/inbox/{pid}` and `/members`.
+
+Then run `mailbox relay verify <url>` and, with throwaway founders, `--full`. Clients refuse any relay that fails the identity check, so a relay that passes both runs can carry mail. State the protocol version you implement in the identity reply, and bump it as the protocol changes.
 
 ## What the operator sees
 

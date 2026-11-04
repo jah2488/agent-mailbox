@@ -75,6 +75,7 @@ mailbox status                 # who you are, your fingerprint, and what is runn
 mailbox invite                 # copy the command a teammate runs to add you
 mailbox peers                  # contacts grouped by relay, with fingerprints
 mailbox sync                   # fetch new mail now
+mailbox relay verify [<url>]   # check a relay against the protocol (yours by default)
 mailbox hook install|remove    # the inbox hook in ~/.claude/settings.json (the installer adds it)
 mailbox help                   # every command
 ```

@@ -517,3 +517,24 @@ test("a guest whose only host is no longer a member can't read", async () => {
   assert.equal((await post("withdraw", alice, host, new Date(NOW.getTime() + 60_000))).status, 201);
   assert.equal((await open(store)(signedGet(`/inbox/${newcomer.pid}`, newcomer, NOW, "n3"))).status, 401);
 });
+
+// ---- Protocol versions ----
+
+test("a relay refuses a client below its security floor with 426, and serves one at or above it", async () => {
+  const deps = { store: memoryStore(), roots: allRoots, now: () => NOW, identity: RELAY_KEY, securityFloor: "1.1" };
+  const read = (version?: string) => {
+    const req = signedGet(`/inbox/${bob.pid}`, bob, NOW, `n-${version ?? "none"}`);
+    if (version !== undefined) req.headers.set("agent-mailbox-version", version);
+    return handle(req, deps);
+  };
+  const old = await read();
+  assert.deepEqual([old.status, await json(old)], [426, { error: "upgrade_required", min_version: "1.1" }], "no header means a client from before versioning");
+  assert.equal((await read("1.0")).status, 426);
+  assert.equal((await read("1.1")).status, 200);
+  assert.equal((await read("1.7")).status, 200, "a newer minor is fine");
+  assert.equal((await handle(new Request(`${BASE}/.well-known/agent-mailbox?challenge=fresh-challenge-0001`), deps)).status, 200, "the identity probe is always open, so old clients can learn why");
+});
+
+test("with no security fixes yet, a client that sends no version is served", async () => {
+  assert.equal((await relay()(signedGet(`/inbox/${bob.pid}`, bob))).status, 200);
+});
