@@ -602,3 +602,12 @@ test("a closed relay can't host a contact from another relay, and says so", asyn
   assert.match(bobs.lines.join("\n"), /operator adds people/);
   assert.equal((await send(bob.deps, { to: "Alice", tag: "status", text: "ok" })).delivered, true, "no undeliverable hello jams the queue");
 });
+
+test("mailbox peers groups contacts under their relay, yours first", async () => {
+  const { bob, friend } = await world({ join: { kind: "any-member" } });
+  await run(await inviteOf(friend), ioFor(bob));
+  const io = ioFor(bob);
+  assert.equal(await run(["peers"], io), 0);
+  const out = io.lines.join("\n");
+  assert.match(out, /^relay\.test \(your relay\)\n {2}Alice\s[\s\S]*\nother\.test\n {2}Friend\s.*waiting for them to add you/);
+});

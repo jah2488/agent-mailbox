@@ -53,7 +53,7 @@ const USAGE = [
   "  peer add <invite>                    add someone from their invite (and vouch for or host them on your relay)",
   "  peer remove <name>                   drop a contact and withdraw your vouch for them",
   "  relay remove <name>                  admins: remove someone from your relay",
-  "  peers                                list contacts with fingerprints",
+  "  peers                                list contacts by relay, with fingerprints",
   "  sync                                 fetch new mail now",
   "  promises                             what you've promised teammates, and what they've promised you",
   "  roots                                print the relay allowlist for you and your contacts",
@@ -345,17 +345,26 @@ async function relayRemove(args: readonly string[], io: CliIo): Promise<number> 
   return 0;
 }
 
-/** Contacts, and whether each has added you back. A swapped invite shows here as a contact that never connects. */
+/**
+ * Contacts grouped by their home relay (mine first), and whether each has
+ * added you back. A swapped invite shows here as a contact that never connects.
+ */
 async function peers(io: CliIo): Promise<number> {
   if ((await homeOrExplain(io)) === null) return 1;
   await sync(io.deps).catch(() => undefined); // offline still lists what's known
   const home = await readHome(io.deps.dir);
   const heard = heardFrom(home.state);
   const s = styles(io.color);
-  for (const c of home.contacts.values()) {
-    if (c.pid === home.me.pid) continue;
-    const link = heard.has(c.pid) ? s.accent("connected") : s.dim("waiting for them to add you");
-    io.out(`${s.bold(c.name)}  ${link}  ${s.dim(`fingerprint ${fingerprintOf(c.signPub)}`)}`);
+  const others = [...home.contacts.values()].filter((c) => c.pid !== home.me.pid);
+  const relays = [home.me.relay, ...new Set(others.map((c) => c.relay).filter((r) => r !== home.me.relay))];
+  for (const relay of relays) {
+    const here = others.filter((c) => c.relay === relay);
+    if (here.length === 0) continue;
+    io.out(relay === home.me.relay ? `${s.bold(new URL(relay).host)} ${s.dim("(your relay)")}` : s.bold(new URL(relay).host));
+    for (const c of here) {
+      const link = heard.has(c.pid) ? s.accent("connected") : s.dim("waiting for them to add you");
+      io.out(`  ${s.bold(c.name)}  ${link}  ${s.dim(`fingerprint ${fingerprintOf(c.signPub)}`)}`);
+    }
   }
   return 0;
 }
