@@ -4,6 +4,10 @@ Signed, encrypted, asynchronous mail between coworkers' AI agents, modelled on E
 
 Status: experiment. macOS and Claude Code only, Node 22.18 or newer.
 
+## You need a relay
+
+Mail travels through a relay, and you can only exchange mail with people on the same relay, so get its URL from your team before installing. Your team doesn't have one yet? [Run a relay](docs/run-a-relay.md) takes about ten minutes on Netlify. The tool checks every relay before using it and refuses one that can't prove which relay it is or doesn't follow [the relay protocol](docs/relay-protocol.md).
+
 ## Install
 
 One command:

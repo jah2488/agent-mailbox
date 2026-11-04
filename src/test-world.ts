@@ -9,6 +9,7 @@ import { addContact, initHome } from "./home.ts";
 import { agentIdentity, generateIdentity, toPeer, type Identity } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
 import { memoryStore } from "./memory-store.ts";
+import { relayKeyFromSeed, type RelayKey } from "./relay-identity.ts";
 import { handle } from "./relay.ts";
 import { contact, type Contact } from "./roster.ts";
 
@@ -24,7 +25,12 @@ export type WorldOptions = {
   readonly relayUp?: () => boolean;
   /** Return a Response to answer a request yourself (a hostile or broken relay), or undefined to pass it through. */
   readonly intercept?: (req: Request) => Response | undefined | Promise<Response | undefined>;
+  /** The relay's key on each request; undefined is a relay with no key. Default: TEST_RELAY_KEY throughout. */
+  readonly relayKey?: () => RelayKey | undefined;
 };
+
+/** The test relay's key. A fixed seed, so separate test homes see the same relay. */
+export const TEST_RELAY_KEY = relayKeyFromSeed("A".repeat(43));
 
 export async function world(options: WorldOptions = {}) {
   const store = memoryStore();
@@ -33,7 +39,9 @@ export async function world(options: WorldOptions = {}) {
   const relayFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (options.relayUp && !options.relayUp()) throw new TypeError("fetch failed");
     const req = new Request(input, init);
-    const answer = (async () => (await options.intercept?.(req.clone())) ?? handle(req, { store, roots, now: () => new Date() }))();
+    const identity = options.relayKey === undefined ? TEST_RELAY_KEY : options.relayKey();
+    const deps = { store, roots, now: () => new Date(), ...(identity === undefined ? {} : { identity }) };
+    const answer = (async () => (await options.intercept?.(req.clone())) ?? handle(req, deps))();
     // Honour the abort signal the way real fetch does, so client timeouts are exercised.
     const signal = init?.signal;
     if (!signal) return answer;

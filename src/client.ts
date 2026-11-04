@@ -21,6 +21,7 @@ import {
   type Outbound,
   type Pattern,
 } from "./mailbox.ts";
+import { checkRelay } from "./relay-check.ts";
 import { signRequest, type RequestSigner } from "./request-auth.ts";
 import type { Contact } from "./roster.ts";
 import sodium from "./sodium.ts";
@@ -104,6 +105,9 @@ function relayFetch(deps: ClientDeps, url: string, init: RequestInit = {}): Prom
 
 /** Puts every undelivered message on my home relay, oldest first, stopping at the first failure. */
 async function flush(deps: ClientDeps, home: Home, state: MailboxState): Promise<{ readonly state: MailboxState; readonly error?: string }> {
+  if (pendingDelivery(state).length === 0) return { state };
+  const relay = await checkRelay(deps, home.me.relay);
+  if (!relay.ok) return { state, error: `${home.me.relay}: ${relay.error}` };
   let current = state;
   for (const message of pendingDelivery(state)) {
     if (message.wire === null) continue; // Unreachable: pending messages always keep their bytes.
@@ -173,7 +177,14 @@ function readEntries(body: unknown): readonly InboxEntry[] | null {
 }
 
 /** New entries on every distinct relay in my roster, above what I already hold from each sender. */
-async function listWaiting(deps: ClientDeps, home: Home, signer: RequestSigner, state: MailboxState): Promise<{ readonly relay: string; readonly entries: readonly InboxEntry[]; readonly error?: string }[]> {
+/** checked: verify each relay's identity first (sync does; the read-only hook count skips it to stay fast and lock-free). */
+async function listWaiting(
+  deps: ClientDeps,
+  home: Home,
+  signer: RequestSigner,
+  state: MailboxState,
+  checked: boolean,
+): Promise<{ readonly relay: string; readonly entries: readonly InboxEntry[]; readonly error?: string }[]> {
   // Pids and seqs need no escaping, and the query must reach the relay exactly
   // as signed, so it is built by hand rather than through URLSearchParams.
   const after = Object.entries(knownHeads(state))
@@ -184,6 +195,10 @@ async function listWaiting(deps: ClientDeps, home: Home, signer: RequestSigner, 
   return Promise.all(
     relays.map(async (relay) => {
       try {
+        if (checked) {
+          const identity = await checkRelay(deps, relay);
+          if (!identity.ok) return { relay, entries: [], error: `${relay}: ${identity.error}` };
+        }
         const res = await signedGet(deps, relay, path, signer);
         if (res.status !== 200) return { relay, entries: [], error: `${relay}: ${await describeFailure(res)}` };
         const entries = readEntries(await res.json().catch(() => null));
@@ -213,7 +228,7 @@ async function syncUnlocked(deps: ClientDeps, home: Home, acting: Acting): Promi
   let received = 0;
   const stopped = new Set<string>();
 
-  for (const { relay, entries, error } of await listWaiting(deps, home, acting.signer, state)) {
+  for (const { relay, entries, error } of await listWaiting(deps, home, acting.signer, state, true)) {
     if (error !== undefined) errors.push(error);
     for (const { from, seq } of entries) {
       const sender = home.contacts.get(from as Pid);
@@ -292,7 +307,7 @@ export async function readThread(deps: ClientDeps, ref: string): Promise<readonl
 export async function checkInbox(deps: ClientDeps): Promise<InboxCheck> {
   const home = await readHome(deps.dir);
   const acting = await actingFor(deps, home);
-  const known = (await listWaiting(deps, home, acting.signer, home.state)).flatMap((r) => r.entries).filter((e) => home.contacts.has(e.from as Pid));
+  const known = (await listWaiting(deps, home, acting.signer, home.state, false)).flatMap((r) => r.entries).filter((e) => home.contacts.has(e.from as Pid));
   const names = [...new Set(known.map((e) => home.contacts.get(e.from as Pid)?.name ?? e.from))];
   return { waiting: known.length, unread: unreadCount(home.state), from: names };
 }

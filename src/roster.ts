@@ -80,16 +80,28 @@ const INVITE_PREFIX = "am1-";
  * A person's roster entry as one paste-safe word: base64url, so it survives
  * Slack, shells and line wrapping without quotes. Public keys only.
  */
-export function inviteToken(c: Contact): string {
-  return INVITE_PREFIX + Buffer.from(JSON.stringify(rosterEntry(c))).toString("base64url");
+export function inviteToken(c: Contact, relayKey?: string): string {
+  const entry = { ...rosterEntry(c), ...(relayKey === undefined ? {} : { relay_key: relayKey }) };
+  return INVITE_PREFIX + Buffer.from(JSON.stringify(entry)).toString("base64url");
 }
 
 /** The contact an invite names, checked exactly as a roster entry is (pid against key, name, relay). */
-export function readInvite(token: string): { readonly ok: true; readonly contact: Contact } | { readonly ok: false; readonly error: string } {
+export function readInvite(token: string): { readonly ok: true; readonly contact: Contact; readonly relayKey?: string } | { readonly ok: false; readonly error: string } {
   const notInvite = { ok: false, error: "that's not an invite; ask them for the command `mailbox invite` copies" } as const;
   if (!token.startsWith(INVITE_PREFIX)) return notInvite;
   const json = Buffer.from(token.slice(INVITE_PREFIX.length), "base64url").toString("utf8");
-  const parsed = parseRoster(`[${json}]`);
-  if (!parsed.ok) return json.trim().startsWith("{") ? { ok: false, error: parsed.error.replace(/^roster 0: /, "invite rejected: ") } : notInvite;
-  return { ok: true, contact: [...parsed.contacts.values()][0]! };
+  // The relay's key travels beside the roster entry: the entry itself stays exactly what a roster holds.
+  let relayKey: unknown;
+  let entry = json;
+  try {
+    const { relay_key, ...rest } = JSON.parse(json) as Record<string, unknown>;
+    relayKey = relay_key;
+    entry = JSON.stringify(rest);
+  } catch {
+    return notInvite;
+  }
+  if (relayKey !== undefined && (typeof relayKey !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(relayKey))) return { ok: false, error: "invite rejected: malformed relay key" };
+  const parsed = parseRoster(`[${entry}]`);
+  if (!parsed.ok) return { ok: false, error: parsed.error.replace(/^roster 0: /, "invite rejected: ") };
+  return { ok: true, contact: [...parsed.contacts.values()][0]!, ...(relayKey === undefined ? {} : { relayKey: relayKey as string }) };
 }

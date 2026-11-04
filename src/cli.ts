@@ -6,6 +6,7 @@ import { hasAskRule, hasHook, withHook, withoutAskRule, withoutHook } from "./cl
 import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
+import { checkRelay, readPins } from "./relay-check.ts";
 import { send, sync, type ClientDeps } from "./client.ts";
 import { heardFrom } from "./mailbox.ts";
 import { addContact, initHome, readHome, type Home } from "./home.ts";
@@ -127,17 +128,30 @@ async function setup(args: readonly string[], io: CliIo): Promise<number> {
   if (existing !== null) {
     io.out(`You're already set up as ${existing.me.name} on ${new URL(existing.me.relay).host}; keeping that identity.`);
   } else {
-    const relay =
-      values.relay === undefined
-        ? await askUntil(io, `${s.accent("Relay URL")} ${s.dim("(your team's agent-mailbox relay, https://...)")}: `, normaliseRelay, "That isn't an https URL (http is allowed only for localhost). Try again.")
-        : normaliseRelay(values.relay);
-    if (values.relay !== undefined && relay === null) {
-      io.err("--relay must be an https URL (http only for localhost)");
-      return 2;
-    }
-    if (relay === null) {
-      io.err("no terminal to ask your relay; pass --relay <url>");
-      return 2;
+    let relay: string | null = null;
+    if (values.relay !== undefined) {
+      relay = normaliseRelay(values.relay);
+      if (relay === null) {
+        io.err("--relay must be an https URL (http only for localhost)");
+        return 2;
+      }
+      const checked = await checkRelay(io.deps, relay);
+      if (!checked.ok) {
+        io.err(`${new URL(relay).host} ${checked.error}; nothing was set up.`);
+        return 2;
+      }
+    } else {
+      // Asked until the answer is a relay that passes the check: a URL alone isn't enough.
+      while (relay === null) {
+        const answer = await askUntil(io, `${s.accent("Relay URL")} ${s.dim("(your team's agent-mailbox relay, https://...)")}: `, normaliseRelay, "That isn't an https URL (http is allowed only for localhost). Try again.");
+        if (answer === null) {
+          io.err("no terminal to ask your relay; pass --relay <url>");
+          return 2;
+        }
+        const checked = await checkRelay(io.deps, answer);
+        if (checked.ok) relay = answer;
+        else io.err(`${new URL(answer).host} ${checked.error}. Try another relay.`);
+      }
     }
     const name =
       values.name === undefined
@@ -184,7 +198,7 @@ async function invite(args: readonly string[], io: CliIo): Promise<number> {
   const { values } = parseArgs({ args: [...args], options: { print: { type: "boolean" } } });
   const home = await homeOrExplain(io);
   if (home === null) return 1;
-  const command = `mailbox peer add ${inviteToken(home.me)}`;
+  const command = `mailbox peer add ${inviteToken(home.me, (await readPins(io.deps.dir))[home.me.relay]?.key)}`;
   if (values.print === true) {
     io.out(command);
     return 0;
@@ -213,6 +227,11 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
     return 1;
   }
   const them = read.contact;
+  const relay = await checkRelay(io.deps, them.relay, read.relayKey);
+  if (!relay.ok) {
+    io.err(`Nothing added: ${them.name}'s relay ${new URL(them.relay).host} ${relay.error}.`);
+    return 1;
+  }
   try {
     await addContact(io.deps.dir, them);
   } catch (error) {
@@ -379,7 +398,7 @@ async function status(io: CliIo): Promise<number> {
   const version = await io.exec("git", ["-C", io.repoRoot, "rev-parse", "--short", "HEAD"]);
   const facts: Fact[] = [
     { key: "Name", value: home.me.name, strong: true },
-    { key: "Relay", value: new URL(home.me.relay).host },
+    { key: "Relay", value: `${new URL(home.me.relay).host} ${(await readPins(io.deps.dir))[home.me.relay] === undefined ? "(not verified yet)" : "(verified)"}` },
     { key: "Fingerprint", value: fingerprintOf(home.me.signPub), strong: true },
     { key: "Contacts", value: others.length === 0 ? "none yet" : others.join(", ") },
     { key: "Daemon", value: (await daemonInstalled(io, home)) ? "on, and at every login" : "off (mailbox daemon start)" },

@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { checkInbox, receive, revokeAgent, send, sync } from "./client.ts";
 import { readHome } from "./home.ts";
 import { take, thread } from "./mailbox.ts";
 import { issueCert } from "./cert.ts";
 import { agentIdentity } from "./identity.ts";
-import { daemonOf, world } from "./test-world.ts";
+import { relayKeyFromSeed, type RelayKey } from "./relay-identity.ts";
+import { daemonOf, TEST_RELAY_KEY, world } from "./test-world.ts";
 
 test("alice asks bob by name; bob syncs and takes exactly her message", async () => {
   const { alice, bob } = await world();
@@ -131,7 +132,8 @@ test("a relay's error text never reaches the result, because it could carry inst
 
 test("a malformed inbox listing is that relay's error, not a crash", async () => {
   const { bob } = await world({
-    intercept: (req) => (new URL(req.url).pathname.startsWith("/inbox/") ? Response.json({ entries: [{ from: "../../etc", seq: -1 }] }) : undefined),
+    // Only signed reads: the relay still refuses the unsigned identity probe, as an honest one would.
+    intercept: (req) => (new URL(req.url).pathname.startsWith("/inbox/") && req.headers.has("authorization") ? Response.json({ entries: [{ from: "../../etc", seq: -1 }] }) : undefined),
   });
   const result = await sync(bob.deps);
   assert.equal(result.received, 0);
@@ -224,4 +226,45 @@ test("a revoke only counts when the person's root signed it, never an agent", as
 
   await sync(alice.deps);
   assert.ok((await readHome(alice.deps.dir)).state.inbox.some((m) => m.body.prose === "still trusted"));
+});
+
+
+// ---- Relay identity checks ----
+
+test("a relay that answers with a different key than the one pinned is refused, and nothing is fetched from it", async () => {
+  let key: RelayKey = TEST_RELAY_KEY;
+  const { alice, bob } = await world({ relayKey: () => key });
+  await sync(bob.deps); // pins the relay's key
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+
+  key = relayKeyFromSeed("B".repeat(42) + "A"); // the relay at that URL is now a different one
+  // Age the daily check so the next sync looks again.
+  const pins = JSON.parse(await readFile(join(bob.deps.dir, "relays.json"), "utf8")) as Record<string, { key: string; checkedAt: string }>;
+  await writeFile(join(bob.deps.dir, "relays.json"), JSON.stringify(Object.fromEntries(Object.entries(pins).map(([url, pin]) => [url, { ...pin, checkedAt: new Date(0).toISOString() }]))));
+  const synced = await sync(bob.deps);
+  assert.equal(synced.received, 0);
+  assert.match(synced.errors.join("\n"), /relay\.test: its key changed since you first used it; refusing it/);
+});
+
+test("a relay with no key of its own is refused", async () => {
+  const { bob } = await world({ relayKey: () => undefined });
+  const synced = await sync(bob.deps);
+  assert.match(synced.errors.join("\n"), /relay\.test: .*relay_has_no_key|relay\.test: .*has no key/);
+});
+
+test("a relay is checked once a day, not on every sync", async () => {
+  let wellKnown = 0;
+  const { bob } = await world({ intercept: (req) => (new URL(req.url).pathname === "/.well-known/agent-mailbox" ? void wellKnown++ : undefined) });
+  await sync(bob.deps);
+  await sync(bob.deps);
+  await sync(bob.deps);
+  assert.equal(wellKnown, 1);
+});
+
+test("a relay with a valid key that serves inbox reads without a signature is refused", async () => {
+  const { bob } = await world({
+    intercept: (req) => (new URL(req.url).pathname.startsWith("/inbox/") && !req.headers.has("authorization") ? Response.json({ entries: [] }) : undefined),
+  });
+  const synced = await sync(bob.deps);
+  assert.match(synced.errors.join("\n"), /relay\.test: serves inbox reads without a signature/);
 });

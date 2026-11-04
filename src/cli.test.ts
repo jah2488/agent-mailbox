@@ -7,7 +7,19 @@ import { run, type CliIo } from "./cli.ts";
 import { readHome } from "./home.ts";
 import { fingerprintOf } from "./identity.ts";
 import { fileKeyStore } from "./keystore.ts";
+import { memoryStore } from "./memory-store.ts";
+import { handle } from "./relay.ts";
+import { relayKeyFromSeed } from "./relay-identity.ts";
+import { TEST_RELAY_KEY } from "./test-world.ts";
 import { parseRoots } from "./roots.ts";
+
+/** relay.example is a conforming relay with the test key; nokey.example is a relay that has no key of its own. */
+const relayStore = memoryStore();
+const testRelays = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const req = new Request(input, init);
+  const identity = new URL(req.url).host === "relay.example" ? { identity: TEST_RELAY_KEY } : {};
+  return handle(req, { store: relayStore, roots: new Map(), now: () => new Date(), ...identity });
+}) as typeof fetch;
 
 /** answers are typed in order at each wizard question; when they run out, there's no terminal to ask. */
 async function freshIo(answers: readonly string[] = []): Promise<CliIo & { readonly lines: string[]; readonly errors: string[]; readonly asked: string[]; readonly copied: string[] }> {
@@ -30,7 +42,7 @@ async function freshIo(answers: readonly string[] = []): Promise<CliIo & { reado
       asked.push(question);
       return queue.shift() ?? null;
     },
-    deps: { dir, keys: fileKeyStore(join(dir, "keys.json")), fetch: globalThis.fetch, now: () => new Date() },
+    deps: { dir, keys: fileKeyStore(join(dir, "keys.json")), fetch: testRelays, now: () => new Date() },
     out: (line) => lines.push(line),
     err: (line) => errors.push(line),
     repoRoot: "/opt/agent-mailbox",
@@ -282,4 +294,37 @@ test("status before setup says how to start", async () => {
   const io = await freshIo();
   assert.equal(await run(["status"], io), 1);
   assert.match(io.errors.join("\n"), /mailbox setup/);
+});
+
+// ---- Relay checks at setup and peer add ----
+
+test("setup refuses a relay that can't prove which relay it is, and asks again", async () => {
+  const io = await freshIo(["https://nokey.example", "https://relay.example", "Anil"]);
+  assert.equal(await run(["setup"], io), 0, io.errors.join("\n"));
+  assert.equal(io.asked.filter((q) => /Relay URL/.test(q)).length, 2);
+  assert.match(io.errors.join("\n"), /nokey\.example .*can't prove which relay it is/);
+  assert.equal((await readHome(io.deps.dir)).me.relay, "https://relay.example");
+});
+
+test("setup with a --relay that fails the check stops before creating anything", async () => {
+  const io = await freshIo();
+  assert.equal(await run(["setup", "--relay", "https://nokey.example", "--name", "Anil"], io), 2);
+  await assert.rejects(readHome(io.deps.dir));
+});
+
+test("an invite carries its relay's verified key, and an invite naming a different key is refused", async () => {
+  const ada = await freshIo();
+  await run(["setup", "--relay", "https://relay.example", "--name", "Ada"], ada);
+  ada.lines.length = 0;
+  await run(["invite", "--print"], ada);
+  const token = ada.lines[0]!.split(" ").at(-1)!;
+  const entry = JSON.parse(Buffer.from(token.slice(4), "base64url").toString()) as Record<string, unknown>;
+  assert.equal(entry["relay_key"], TEST_RELAY_KEY.publicKey);
+
+  const forged = "am1-" + Buffer.from(JSON.stringify({ ...entry, relay_key: relayKeyFromSeed("B".repeat(42) + "A").publicKey })).toString("base64url");
+  const justin = await freshIo();
+  await run(["setup", "--relay", "https://relay.example", "--name", "Justin"], justin);
+  assert.equal(await run(["peer", "add", forged], justin), 1);
+  assert.match(justin.errors.join("\n"), /doesn't have the key the invite named/);
+  assert.equal((await readHome(justin.deps.dir)).contacts.size, 1);
 });
