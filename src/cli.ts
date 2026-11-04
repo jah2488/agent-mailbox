@@ -9,6 +9,8 @@ import { readCert, shareDir } from "./daemon-files.ts";
 import { PROTOCOL_VERSION } from "./protocol-version.ts";
 import { checkRelay, readPins } from "./relay-check.ts";
 import { fullChecks, readOnlyChecks, readTestKeys } from "./relay-verify.ts";
+import { configCommand } from "./cli-config.ts";
+import { doctor } from "./cli-doctor.ts";
 import { membership, promises, send, sync, type ClientDeps, type MembershipResult, type NamedCommitment } from "./client.ts";
 import { ledger } from "./promises.ts";
 import { heardFrom } from "./mailbox.ts";
@@ -50,6 +52,7 @@ const USAGE = [
   "  setup [--relay <url>] [--name <name>] first-run wizard: identity, daemon key, and how to share",
   "  keygen --name <name> --relay <url>   create your identity (key goes to the Keychain)",
   "  status                               who you are, what to share, and what's running",
+  "  doctor                               check the whole setup; offers to fix what it safely can",
   "  whoami                               your name, relay and fingerprint",
   "  invite [--print]                     copy the command a teammate runs to add you",
   "  peer add <invite>                    add someone from their invite (and vouch for or host them on your relay)",
@@ -71,6 +74,7 @@ const USAGE = [
   "  grade <ref> right|wrong              record whether a daemon answer was right",
   "  stats [--since 14d]                  asks, answers, promises and daemon accuracy for the window",
   "  audit verify                         check the daemon's audit log is intact and signed",
+  "  config [show|get|set|unset] ...      read or change config.toml (mailbox config share add|remove for folders)",
   "  update                               get the latest version and restart what runs it",
   "  uninstall                            stop the daemon, unregister from Claude Code, remove the command",
 ].join("\n");
@@ -622,6 +626,10 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       if (rest[0] === "remove") return relayRemove(rest.slice(1), io);
       if (rest[0] === "verify") return relayVerify(rest.slice(1), io);
       break;
+    case "config":
+      return configCommand(rest, io);
+    case "doctor":
+      return doctor(io);
     case "uninstall":
       return uninstall(io);
     case "audit":

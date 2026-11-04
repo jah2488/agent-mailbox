@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readShare, SHARE_LIMITS } from "./share.ts";
+import { readShare, readShareFolders, SHARE_LIMITS } from "./share.ts";
 
 async function shareDir(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "mailbox-share-"));
@@ -60,4 +60,21 @@ test("reading stops at the total budget, so one huge folder can't flood a prompt
 
 test("a missing share folder is empty, not an error", async () => {
   assert.deepEqual(await readShare(join(tmpdir(), "does-not-exist-mailbox-share")), { files: [], skipped: [] });
+});
+
+test("named folders are read under their names, and a missing map means the share folder", async () => {
+  const team = await shareDir({ "plan.md": "Q4 plan" });
+  const status = await shareDir({ "today.md": "shipping" });
+  const read = await readShareFolders({ team, status }, "/nonexistent");
+  assert.deepEqual(read.files.map((f) => f.path), ["status/today.md", "team/plan.md"]);
+  const fallback = await shareDir({ "status/now.md": "x" });
+  assert.deepEqual((await readShareFolders(null, fallback)).files.map((f) => f.path), ["status/now.md"]);
+});
+
+test("a named folder that is itself a symlink is skipped, since it could be repointed after signing", async () => {
+  const real = await shareDir({ "plan.md": "Q4 plan" });
+  const link = join(await mkdtemp(join(tmpdir(), "share-link-")), "team");
+  await symlink(real, link);
+  const read = await readShareFolders({ team: link }, "/nonexistent");
+  assert.deepEqual([read.files, read.skipped], [[], [{ path: "team/", reason: "symlink" }]]);
 });

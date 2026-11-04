@@ -10,7 +10,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkInbox } from "./client.ts";
 import { depsFromEnv, isDevCheckout } from "./config.ts";
-import { certNotice, inboxNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice } from "./hook-core.ts";
+import { certNotice, inboxNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice, wantedChecks } from "./hook-core.ts";
+import { readSettings } from "./settings.ts";
 import { readHome } from "./home.ts";
 import { ledger } from "./promises.ts";
 
@@ -74,7 +75,14 @@ async function main(): Promise<void> {
   const now = deps.now();
   const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), CHECK_TIMEOUT_MS).unref());
   const settle = (p: Promise<string | null>) => Promise.race([p.catch(() => null), timeout]);
-  const notices = await Promise.all([settle(inbox(deps, now)), settle(update(deps.dir, now)), settle(cert(deps.dir, now)), settle(promisesDue(deps.dir, now))]);
+  const want = wantedChecks(await readSettings(deps.dir, homedir()).catch(() => ({ ok: false as const, errors: [] })));
+  const off = Promise.resolve(null);
+  const notices = await Promise.all([
+    settle(want.inbox ? inbox(deps, now) : off),
+    settle(want.update ? update(deps.dir, now) : off),
+    settle(cert(deps.dir, now)),
+    settle(want.promises ? promisesDue(deps.dir, now) : off),
+  ]);
   for (const notice of notices) if (notice !== null) process.stdout.write(`${notice}\n`);
 }
 

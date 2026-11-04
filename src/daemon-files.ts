@@ -6,6 +6,8 @@ import type { Identity, Peer } from "./identity.ts";
 import { canonicalize } from "./canonical.ts";
 import { DEFAULT_POLICY, isCommand, policyParses, signPolicy, verifyPolicy, type SignedPolicy } from "./policy.ts";
 import { DEFAULT_RESPONDER, type ResponderConfig } from "./responder.ts";
+import { readSettings, resolveFolder } from "./settings.ts";
+import { homedir } from "node:os";
 import sodium from "./sodium.ts";
 
 // The daemon's files in the mailbox home. agent.json and policy.json are
@@ -72,19 +74,26 @@ async function readSigned(dir: string): Promise<SignedPolicy | null> {
 }
 
 /** Signs policy.cedar as the next version. Needs the root key, so only the owner can run it. */
-export async function signPolicyFile(dir: string, root: Identity): Promise<{ readonly ok: true; readonly version: number } | { readonly ok: false; readonly error: string }> {
+export async function signPolicyFile(dir: string, root: Identity, home: string = homedir()): Promise<{ readonly ok: true; readonly version: number } | { readonly ok: false; readonly error: string }> {
   const text = await readText(join(dir, POLICY_TEXT));
   if (text === null) return { ok: false, error: `no ${POLICY_TEXT}; run: mailbox daemon setup` };
   if (!policyParses(text)) return { ok: false, error: `${POLICY_TEXT} does not parse as Cedar; nothing was signed` };
   const responder = await readResponderFile(dir);
   if (!responder.ok) return responder;
+  // The folders are signed with the rules, so the daemon reads only what the owner approved.
+  const settings = await readSettings(dir, home);
+  if (!settings.ok) return { ok: false, error: `config.toml has errors, so nothing was signed: ${settings.errors.join("; ")}` };
+  const listed = settings.settings.share.folders;
+  const folders = listed === null ? undefined : Object.fromEntries(Object.entries(listed).map(([name, path]) => [name, resolveFolder(path, home)]));
   const version = Math.max((await readSigned(dir))?.p.version ?? 0, await floorOf(dir)) + 1;
-  await writeJson(join(dir, POLICY), signPolicy(root, version, text, responder.command));
+  await writeJson(join(dir, POLICY), signPolicy(root, version, text, responder.command, folders));
   return { ok: true, version };
 }
 
 /** A verified policy, with the hash every decision records so a later reader knows exactly which rules applied. */
-export type LoadedPolicy = { readonly ok: true; readonly cedar: string; readonly version: number; readonly responder: ResponderConfig; readonly hash: string } | { readonly ok: false; readonly error: string };
+export type LoadedPolicy =
+  | { readonly ok: true; readonly cedar: string; readonly version: number; readonly responder: ResponderConfig; readonly hash: string; readonly folders?: Readonly<Record<string, string>> | null }
+  | { readonly ok: false; readonly error: string };
 
 const policyHash = (signed: SignedPolicy) => "b2:" + sodium.to_hex(sodium.crypto_generichash(32, new TextEncoder().encode(canonicalize(signed.p))));
 
@@ -97,7 +106,7 @@ export async function loadPolicy(dir: string, root: Peer): Promise<LoadedPolicy>
   if (!verified.ok) return verified;
   if (verified.version > floor) await writeFile(join(dir, POLICY_FLOOR), `${verified.version}\n`, { mode: 0o600 });
   const responder = verified.responder === null ? DEFAULT_RESPONDER : { command: verified.responder };
-  return { ok: true, cedar: verified.cedar, version: verified.version, responder, hash: policyHash(signed) };
+  return { ok: true, cedar: verified.cedar, version: verified.version, responder, hash: policyHash(signed), folders: verified.folders };
 }
 
 /** The owner's responder.json, read only when signing. The daemon itself only ever sees the signed copy. */

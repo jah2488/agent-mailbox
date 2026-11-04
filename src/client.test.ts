@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { checkInbox, receive, revokeAgent, send, sync } from "./client.ts";
+import { checkRelay } from "./relay-check.ts";
 import { addContact, readHome } from "./home.ts";
 import { generateIdentity, toPeer } from "./identity.ts";
 import { contact } from "./roster.ts";
@@ -330,4 +331,31 @@ test("a relay below this client's security floor is refused", async () => {
     return { ...body, s: sign(body), version: "0.9", sv: sign({ ...body, version: "0.9" }) };
   }) : undefined) });
   assert.match((await sync(bob.deps)).errors.join("\n"), /relay\.test: .*speaks agent-mailbox 0\.9, below 1\.0, which fixed a security hole/);
+});
+
+test("a fresh pin written before versioning is probed once more, so it doesn't pass a 1.1 relay off as 1.0", async () => {
+  const { bob } = await world();
+  await sync(bob.deps);
+  const pins = JSON.parse(await readFile(join(bob.deps.dir, "relays.json"), "utf8")) as Record<string, { key: string; checkedAt: string }>;
+  const legacy = Object.fromEntries(Object.entries(pins).map(([url, pin]) => [url, { key: pin.key, checkedAt: pin.checkedAt }]));
+  await writeFile(join(bob.deps.dir, "relays.json"), JSON.stringify(legacy));
+  const checked = await checkRelay(bob.deps, "https://relay.test");
+  assert.ok(checked.ok);
+  assert.equal(checked.version, PROTOCOL_VERSION);
+});
+
+test("a relay from before versioning is pinned as 1.0 and not probed on every call", async () => {
+  let probes = 0;
+  const { bob } = await world({
+    intercept: (req) => {
+      if (new URL(req.url).pathname !== "/.well-known/agent-mailbox") return undefined;
+      probes++;
+      return description(req, ({ version: _v, sv: _sv, ...legacy }) => legacy);
+    },
+  });
+  await checkRelay(bob.deps, "https://relay.test");
+  const again = await checkRelay(bob.deps, "https://relay.test");
+  assert.ok(again.ok);
+  assert.equal(again.version, "1.0");
+  assert.equal(probes, 1);
 });

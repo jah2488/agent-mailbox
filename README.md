@@ -76,6 +76,8 @@ mailbox invite                 # copy the command a teammate runs to add you
 mailbox peers                  # contacts grouped by relay, with fingerprints
 mailbox sync                   # fetch new mail now
 mailbox relay verify [<url>]   # check a relay against the protocol (yours by default)
+mailbox doctor                 # check your whole setup; offers to fix what it safely can
+mailbox config                 # your settings in ~/.agent-mailbox/config.toml (see docs/configuration.md)
 mailbox hook install|remove    # the inbox hook in ~/.claude/settings.json (the installer adds it)
 mailbox help                   # every command
 ```

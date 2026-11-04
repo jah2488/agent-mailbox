@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { access, constants, mkdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { appendAudit, verifyAudit, type AuditEntry, type AuditEvent } from "./audit.ts";
@@ -12,7 +12,8 @@ import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { readHome, type Home } from "./home.ts";
 import { agentIdentity, pidOf, type Identity, type Pid } from "./identity.ts";
 import { runResponder } from "./responder.ts";
-import { readShare } from "./share.ts";
+import { readSettings } from "./settings.ts";
+import { readShareFolders } from "./share.ts";
 import sodium from "./sodium.ts";
 import { daemonReplies, gradeKey, stats, type Grades } from "./stats.ts";
 
@@ -66,7 +67,11 @@ function daemonDeps(io: CliIo, home: Home, loaded: Loaded, since: string, report
   return {
     client: loaded.client,
     policy: () => loadPolicy(dir, home.me),
-    share: async () => (await readShare(shareDir(dir))).files,
+    share: async (folders) => (await readShareFolders(folders, shareDir(dir))).files,
+    settings: async () => {
+      const read = await readSettings(dir, homedir());
+      return read.ok ? { ok: true, daemon: read.settings.daemon } : { ok: false, error: read.errors.join("; ") };
+    },
     respond: (prompt, responder) => runResponder(responder, prompt),
     audit: async (event) => {
       await appendAudit(dir, loaded.audit.signSec, event);
@@ -131,7 +136,10 @@ async function runOnce(io: CliIo, forever: boolean): Promise<number> {
   try {
     const deps = daemonDeps(io, home, loaded, since, (event) => io.out(`${event.kind} ${JSON.stringify(event.data)}`));
     await deps.audit({ kind: "started", data: { agent: loaded.name, mode: forever ? "run" : "once" } });
-    if (forever) await runDaemon(deps, { intervalMs: INTERVAL_MS, signal: io.stop, log: io.err });
+    // poll_seconds is read once at start; a change applies on the next daemon start.
+    const configured = await readSettings(io.deps.dir, homedir());
+    const intervalMs = configured.ok ? configured.settings.daemon.poll_seconds * 1000 : INTERVAL_MS;
+    if (forever) await runDaemon(deps, { intervalMs, signal: io.stop, log: io.err });
     else await tick(deps, fresh);
     await deps.audit({ kind: "stopped", data: {} });
     return 0;

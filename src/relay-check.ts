@@ -10,8 +10,13 @@ import sodium from "./sodium.ts";
 // a relay swapped out from under a URL is refused within a day. The same
 // check settles which protocol version to speak with it.
 
-/** version is absent on pins written before versioning, or for a relay that predates it. */
-export type RelayPin = { readonly key: string; readonly checkedAt: string; readonly version?: string };
+/**
+ * version is absent on pins written before versioning, which are probed again
+ * however recent. signed is false for a relay that predates versioning
+ * (version "1.0"); a pin with a version but no signed field came from a
+ * versioned relay.
+ */
+export type RelayPin = { readonly key: string; readonly checkedAt: string; readonly version?: string; readonly signed?: boolean };
 type Pins = Readonly<Record<string, RelayPin>>;
 type Deps = { readonly dir: string; readonly fetch: typeof fetch; readonly now: () => Date; readonly timeoutMs?: number };
 /** version: what to speak with the relay. notice: a mismatch worth telling the person about. */
@@ -84,16 +89,17 @@ export async function checkRelay(deps: Deps, relay: string, claimed?: string): P
     return { ok: false, error: (error as Error).message };
   }
   const pin = pins[relay];
-  const fresh = pin !== undefined && deps.now().getTime() - Date.parse(pin.checkedAt) < RECHECK_MS;
-  if (fresh && (claimed === undefined || claimed === pin.key)) return agreed(pin.key, pin.version ?? "1.0");
+  const fresh = pin?.version !== undefined && deps.now().getTime() - Date.parse(pin.checkedAt) < RECHECK_MS;
+  if (fresh && (claimed === undefined || claimed === pin.key)) return agreed(pin.key, pin.version!);
   const probed = await probeRelay(deps, relay);
   if (!probed.ok) return probed;
   if (pin !== undefined && pin.key !== probed.relayKey) return { ok: false, error: "its key changed since you first used it; refusing it" };
   if (claimed !== undefined && claimed !== probed.relayKey) return { ok: false, error: "doesn't have the key the invite named; refusing it" };
   // Dropping the version (and its signature) would make a relay look older than it is; once it has signed one, it must keep doing so.
-  if (pin?.version !== undefined && !probed.versioned) return { ok: false, error: "answered without the version it signed before; refusing it" };
+  const signedBefore = pin?.version !== undefined && pin.signed !== false;
+  if (signedBefore && !probed.versioned) return { ok: false, error: "answered without the version it signed before; refusing it" };
   const result = agreed(probed.relayKey, probed.version);
   if (!result.ok) return result;
-  await writePin(deps.dir, relay, { key: probed.relayKey, checkedAt: deps.now().toISOString(), ...(probed.versioned ? { version: probed.version } : {}) });
+  await writePin(deps.dir, relay, { key: probed.relayKey, checkedAt: deps.now().toISOString(), version: probed.version, signed: probed.versioned });
   return result;
 }

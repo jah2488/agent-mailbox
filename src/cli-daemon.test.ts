@@ -643,3 +643,115 @@ test("mailbox relay verify names each failed check and exits 1", async () => {
   assert.equal(await run(["relay", "verify", "https://relay.test"], io), 1);
   assert.match(io.lines.join("\n"), /✗ an envelope from a non-member is refused \(403 unknown_sender\): got 201, want 403 unknown_sender/);
 });
+
+// ---- mailbox config ----
+
+test("mailbox config set changes one setting in config.toml, and get reads it back", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob);
+  assert.equal(await run(["config", "set", "daemon.poll_seconds", "90"], io), 0, io.errors.join("\n"));
+  assert.match(await readFile(join(bob.deps.dir, "config.toml"), "utf8"), /\[daemon\]\npoll_seconds = 90/);
+  const got = ioFor(bob);
+  assert.equal(await run(["config", "get", "daemon.poll_seconds"], got), 0);
+  assert.deepEqual(got.lines, ["90"]);
+  const unset = ioFor(bob);
+  assert.equal(await run(["config", "get", "notifications.update_check"], unset), 0);
+  assert.deepEqual(unset.lines, ["true"], "an unset value reads as its default");
+});
+
+test("mailbox config refuses unknown keys and bad values, and changes nothing", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob);
+  assert.equal(await run(["config", "set", "daemon.poll_seconds", "5"], io), 1);
+  assert.match(io.errors.join("\n"), /daemon\.poll_seconds: must be a whole number from 10 to 3600/);
+  assert.equal(await run(["config", "set", "daemon.colour", "red"], io), 1);
+  await assert.rejects(readFile(join(bob.deps.dir, "config.toml"), "utf8"), "no file written");
+});
+
+test("mailbox config share add refuses a folder that breaks the security contract, and says to edit by hand", async () => {
+  const { bob } = await world();
+  const io = ioFor(bob);
+  assert.equal(await run(["config", "share", "add", "everything", "~/"], io), 1);
+  assert.match(io.errors.join("\n"), /covers your whole home folder\. .*edit config\.toml by hand/);
+  const ok = ioFor(bob);
+  assert.equal(await run(["config", "share", "add", "team", "~/work/team"], ok), 0, ok.errors.join("\n"));
+  assert.match(ok.lines.join("\n"), /Run mailbox policy sign to let your daemon read it/);
+  const removed = ioFor(bob);
+  assert.equal(await run(["config", "share", "remove", "team"], removed), 0);
+  assert.doesNotMatch(await readFile(join(bob.deps.dir, "config.toml"), "utf8"), /team/);
+});
+
+test("mailbox config with no subcommand shows the file's path, every setting in force, and any warnings", async () => {
+  const { bob } = await world();
+  await writeFile(join(bob.deps.dir, "config.toml"), `[share.folders]\nkeys = "~/.ssh"\n`);
+  const io = ioFor(bob);
+  assert.equal(await run(["config"], io), 0);
+  const out = io.lines.join("\n");
+  assert.match(out, new RegExp(`^${join(bob.deps.dir, "config.toml")}`));
+  assert.match(out, /\[daemon\]\nanswer = true\npoll_seconds = 30\ncontacts = \["\*"\]/);
+  assert.match(out, /⚠ share\.folders\.keys \(~\/\.ssh\) holds keys or credentials \(~\/\.ssh\)/);
+});
+
+// ---- mailbox doctor ----
+
+/** A person whose setup is complete: PATH, hook and ask rule, MCP registered. HOME points at a temp dir so fixes never touch the real one. */
+async function healthy(person: Person, answers: readonly string[] = []) {
+  const home = await mkdtemp(join(tmpdir(), "doctor-home-"));
+  const io = ioFor(person, { HOME: home, SHELL: "/bin/zsh", PATH: `${join(home, ".local", "bin")}:/usr/bin` });
+  const queue = [...answers];
+  const asking = { ...io, ask: async () => queue.shift() ?? null };
+  await run(["hook", "install"], asking);
+  asking.lines.length = 0;
+  return { io: asking, home };
+}
+
+test("mailbox doctor passes a complete setup and lists what it checked", async () => {
+  const { bob } = await world();
+  const { io } = await healthy(bob);
+  assert.equal(await run(["doctor"], io), 0, io.lines.join("\n") + io.errors.join("\n"));
+  const out = io.lines.join("\n");
+  for (const line of [/✓ ~\/\.local\/bin is on your PATH/, /✓ Node \d+\.\d+/, /✓ your identity and root key are here/, /✓ your relay relay\.test proves its identity \(protocol 1\.1\)/, /✓ config\.toml/, /✓ the inbox hook and the send approval rule are in your agent's settings/, /✓ the MCP server is registered/]) {
+    assert.match(out, line);
+  }
+  assert.match(out, /No problems found\.$/);
+});
+
+test("mailbox doctor finds ~/.local/bin missing from PATH and, with approval, adds it to the shell profile", async () => {
+  const { bob } = await world();
+  const { io, home } = await healthy(bob, ["y"]);
+  const noPath = { ...io, env: { ...io.env, PATH: "/usr/bin" } };
+  assert.equal(await run(["doctor"], noPath), 0, "a fix applied counts as fixed");
+  assert.match(io.lines.join("\n"), /✗ ~\/\.local\/bin isn't on your PATH[\s\S]*fixed: added it to ~\/\.zshrc; open a new terminal/);
+  assert.match(await readFile(join(home, ".zshrc"), "utf8"), /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+});
+
+test("mailbox doctor without approval shows the fix and exits 1", async () => {
+  const { bob } = await world();
+  const { io } = await healthy(bob);
+  const noPath = { ...io, env: { ...io.env, PATH: "/usr/bin" } };
+  assert.equal(await run(["doctor"], noPath), 1);
+  assert.match(io.lines.join("\n"), /to fix: add export PATH="\$HOME\/\.local\/bin:\$PATH" to ~\/\.zshrc/);
+  assert.match(io.lines.join("\n"), /1 problem, 0 warnings\.$/);
+});
+
+test("mailbox doctor reports config.toml errors as problems and broad folders as warnings", async () => {
+  const { bob } = await world();
+  const { io } = await healthy(bob);
+  await writeFile(join(bob.deps.dir, "config.toml"), `[share.folders]\nkeys = "~/.ssh"\n`);
+  assert.equal(await run(["doctor"], io), 0, "warnings alone pass");
+  assert.match(io.lines.join("\n"), /⚠ share\.folders\.keys \(~\/\.ssh\) holds keys or credentials/);
+  await writeFile(join(bob.deps.dir, "config.toml"), `[daemon]\npoll_seconds = 1\n`);
+  io.lines.length = 0;
+  assert.equal(await run(["doctor"], io), 1);
+  assert.match(io.lines.join("\n"), /✗ config\.toml: daemon\.poll_seconds: must be a whole number from 10 to 3600/);
+});
+
+test("mailbox doctor warns when config.toml's folders differ from the ones the daemon's signed policy names", async () => {
+  const { bob } = await world();
+  const { io } = await healthy(bob);
+  await run(["daemon", "setup"], io);
+  await writeFile(join(bob.deps.dir, "config.toml"), `[share.folders]\nteam = "/tmp/team"\n`);
+  io.lines.length = 0;
+  await run(["doctor"], io);
+  assert.match(io.lines.join("\n"), /⚠ config\.toml's share folders aren't signed yet: your daemon still reads the old ones[\s\S]*to fix: mailbox policy sign/);
+});

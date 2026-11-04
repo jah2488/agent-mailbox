@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { certNotice, inboxNotice, promiseNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
+import { certNotice, inboxNotice, promiseNotice, promiseNoticeFor, shouldCheck, updateDue, updateNotice, wantedChecks, HOOK_INTERVAL_MS, UPDATE_INTERVAL_MS } from "./hook-core.ts";
+import { DEFAULT_SETTINGS } from "./settings.ts";
 
 const now = new Date("2026-11-02T12:00:00Z");
 
@@ -88,4 +89,9 @@ test("the promise notice counts only promises the user made, never promises made
   const overdue = { counterparty: "x" as never, ref: "r", item: "i", status: "open" as const, overdue: true, stale: false };
   assert.equal(promiseNoticeFor({ made: [], owed: [overdue] }), null);
   assert.match(promiseNoticeFor({ made: [overdue], owed: [] }) ?? "", /1 overdue promise/);
+});
+
+test("config.toml's notifications switch each check off; a config that won't parse leaves them all on", () => {
+  assert.deepEqual(wantedChecks({ ok: true, settings: { ...DEFAULT_SETTINGS, notifications: { inbox_hook: false, promise_reminders: true, update_check: false } }, warnings: [] }), { inbox: false, update: false, promises: true });
+  assert.deepEqual(wantedChecks({ ok: false, errors: ["line 1: nope"] }), { inbox: true, update: true, promises: true });
 });

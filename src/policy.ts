@@ -18,7 +18,11 @@ export type Tier = "allow" | "flag" | "deny" | "defer";
  * the sharing rules and the responder command that sees what they allow.
  * No responder means the built-in `claude -p`.
  */
-export type SignedPolicy = { readonly p: { readonly v: 1; readonly version: number; readonly cedar: string; readonly responder?: readonly string[] }; readonly s: string };
+/** folders: config.toml's [share.folders], resolved to absolute paths when signed. Absent: the share folder. */
+export type SignedPolicy = {
+  readonly p: { readonly v: 1; readonly version: number; readonly cedar: string; readonly responder?: readonly string[]; readonly folders?: Readonly<Record<string, string>> };
+  readonly s: string;
+};
 
 const POLICY_DOMAIN = "agent-mailbox/v1/policy\n";
 
@@ -99,8 +103,8 @@ const unb64 = (text: string) => sodium.from_base64(text, sodium.base64_variants.
 const signedBytes = (p: SignedPolicy["p"]) => new TextEncoder().encode(POLICY_DOMAIN + canonicalize(p));
 
 /** Only the root signs policy, so a compromised daemon can never widen its own access. */
-export function signPolicy(root: Identity, version: number, text: string, responder?: readonly string[]): SignedPolicy {
-  const p = { v: 1 as const, version, cedar: text, ...(responder === undefined ? {} : { responder }) };
+export function signPolicy(root: Identity, version: number, text: string, responder?: readonly string[], folders?: Readonly<Record<string, string>>): SignedPolicy {
+  const p = { v: 1 as const, version, cedar: text, ...(responder === undefined ? {} : { responder }), ...(folders === undefined ? {} : { folders }) };
   return { p, s: b64(sodium.crypto_sign_detached(signedBytes(p), root.signSec)) };
 }
 
@@ -112,7 +116,9 @@ export function verifyPolicy(
   signed: SignedPolicy,
   root: Peer,
   minVersion: number,
-): { readonly ok: true; readonly cedar: string; readonly version: number; readonly responder: readonly string[] | null } | { readonly ok: false; readonly error: string } {
+):
+  | { readonly ok: true; readonly cedar: string; readonly version: number; readonly responder: readonly string[] | null; readonly folders: Readonly<Record<string, string>> | null }
+  | { readonly ok: false; readonly error: string } {
   try {
     if (!sodium.crypto_sign_verify_detached(unb64(signed.s), signedBytes(signed.p), root.signPub)) return { ok: false, error: "bad policy signature" };
   } catch {
@@ -122,7 +128,9 @@ export function verifyPolicy(
   if (parse(signed.p.cedar) === null) return { ok: false, error: "policy does not parse" };
   const responder = signed.p.responder ?? null;
   if (responder !== null && !isCommand(responder)) return { ok: false, error: "policy responder is not a command" };
-  return { ok: true, cedar: signed.p.cedar, version: signed.p.version, responder };
+  const folders = signed.p.folders ?? null;
+  if (folders !== null && !(typeof folders === "object" && Object.values(folders).every((path) => typeof path === "string" && path.startsWith("/")))) return { ok: false, error: "policy folders are not absolute paths" };
+  return { ok: true, cedar: signed.p.cedar, version: signed.p.version, responder, folders };
 }
 
 /** A program and its arguments, as spawn takes them: never a shell string. */

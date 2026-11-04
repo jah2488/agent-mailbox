@@ -72,3 +72,38 @@ test("a malformed responder.json is never signed", async () => {
   assert.equal(signed.ok, false);
   assert.match((signed as { error: string }).error, /responder\.json/);
 });
+
+test("policy sign copies config.toml's share folders into the signed policy; later edits change nothing until re-signed", async () => {
+  const dir = await home();
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
+  await writeFile(join(dir, "config.toml"), `[share.folders]\nteam = "~/work/team"\n`);
+  assert.deepEqual(await signPolicyFile(dir, root, "/Users/bob"), { ok: true, version: 1 });
+  const loaded = await loadPolicy(dir, toPeer(root));
+  assert.ok(loaded.ok);
+  assert.deepEqual(loaded.folders, { team: "/Users/bob/work/team" });
+
+  await writeFile(join(dir, "config.toml"), `[share.folders]\nteam = "~/work/team"\neverything = "~/"\n`);
+  const still = await loadPolicy(dir, toPeer(root));
+  assert.ok(still.ok);
+  assert.deepEqual(still.folders, { team: "/Users/bob/work/team" }, "an unsigned edit widens nothing");
+
+  const signed = JSON.parse(await readFile(join(dir, "policy.json"), "utf8"));
+  await writeFile(join(dir, "policy.json"), JSON.stringify({ ...signed, p: { ...signed.p, folders: { all: "/" } } }));
+  assert.deepEqual(await loadPolicy(dir, toPeer(root)), { ok: false, error: "bad policy signature" });
+});
+
+test("with no folders in config.toml the signed policy names none, and the daemon reads the share folder as before", async () => {
+  const dir = await home();
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
+  await signPolicyFile(dir, root, "/Users/bob");
+  const loaded = await loadPolicy(dir, toPeer(root));
+  assert.ok(loaded.ok);
+  assert.equal(loaded.folders, null);
+});
+
+test("a config.toml with errors is never signed", async () => {
+  const dir = await home();
+  await writeFile(join(dir, "policy.cedar"), DEFAULT_POLICY);
+  await writeFile(join(dir, "config.toml"), `[share.folders]\nteam = "relative/path"\n`);
+  assert.deepEqual(await signPolicyFile(dir, root, "/Users/bob"), { ok: false, error: "config.toml has errors, so nothing was signed: share.folders.team: must be an absolute path or start with ~/" });
+});

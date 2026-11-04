@@ -1,5 +1,13 @@
 import type { Ledger } from "./promises.ts";
 import type { InboxCheck } from "./client.ts";
+import type { SettingsRead } from "./settings.ts";
+
+/** Which checks config.toml leaves on. A config that won't parse leaves them all on: the hook never fails a prompt over it. */
+export function wantedChecks(read: SettingsRead): { readonly inbox: boolean; readonly update: boolean; readonly promises: boolean } {
+  if (!read.ok) return { inbox: true, update: true, promises: true };
+  const n = read.settings.notifications;
+  return { inbox: n.inbox_hook, update: n.update_check, promises: n.promise_reminders };
+}
 
 /** The hook runs on every prompt; it checks the relays at most this often. */
 export const HOOK_INTERVAL_MS = 30_000;

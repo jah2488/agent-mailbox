@@ -209,3 +209,59 @@ when { resource.path like "status/*" && principal.relay == "relay.test" };`;
   await tick(deps, fresh);
   assert.equal((daemon.audit[0]!.data as { outcome: string }).outcome, "defer");
 });
+
+// ---- config.toml ----
+
+const settings = (daemon: Partial<{ answer: boolean; poll_seconds: number; contacts: string[] }>) => async () => ({ ok: true as const, daemon: { answer: true, poll_seconds: 30, contacts: ["*"], ...daemon } });
+
+test("with daemon.answer = false, every ask is deferred without asking the model", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  const deps = { ...daemon.deps, settings: settings({ answer: false }) };
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "what are you shipping?" });
+  await tick(deps, fresh);
+  assert.deepEqual((await receive(alice.deps, { reply_to: asked.ref })).messages.map((m) => m.body.payload), [{ status: "deferred" }]);
+  assert.deepEqual(daemon.prompts, []);
+  assert.equal((daemon.audit[0]!.data as { reason?: string }).reason, "daemon.answer is false in config.toml");
+});
+
+test("daemon.contacts limits who the daemon answers; anyone else is deferred to the owner", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  const asked = await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await tick({ ...daemon.deps, settings: settings({ contacts: ["Sam"] }) }, fresh);
+  assert.deepEqual((await receive(alice.deps, { reply_to: asked.ref })).messages.map((m) => m.body.payload), [{ status: "deferred" }]);
+  assert.equal((daemon.audit[0]!.data as { reason?: string }).reason, "Alice isn't in daemon.contacts in config.toml");
+
+  const again = await send(alice.deps, { to: "Bob", tag: "ask", text: "status now?" });
+  await tick({ ...daemon.deps, settings: settings({ contacts: ["alice"] }) }, fresh);
+  assert.equal((await receive(alice.deps, { reply_to: again.ref })).messages[0]?.body.tag, "reply");
+  assert.equal(daemon.prompts.length, 1, "names match without regard to case");
+});
+
+test("a config.toml with errors makes the daemon defer everything rather than guess", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await tick({ ...daemon.deps, settings: async () => ({ ok: false as const, error: "line 3: duplicate key answer" }) }, fresh);
+  assert.deepEqual(daemon.prompts, []);
+  assert.equal((daemon.audit[0]!.data as { reason?: string }).reason, "config.toml has errors (line 3: duplicate key answer); run mailbox doctor");
+});
+
+test("the daemon reads the folders its signed policy names, not whatever config.toml says now", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  const asked: (Readonly<Record<string, string>> | null)[] = [];
+  const folders = { team: "/Users/bob/work/team" };
+  const deps: DaemonDeps = {
+    ...daemon.deps,
+    policy: async () => ({ ok: true, cedar: DEFAULT_POLICY, version: 7, responder: DEFAULT_RESPONDER, hash: "b2:policy", folders }),
+    share: async (f) => {
+      asked.push(f);
+      return [STATUS];
+    },
+  };
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await tick(deps, fresh);
+  assert.deepEqual(asked, [folders]);
+});

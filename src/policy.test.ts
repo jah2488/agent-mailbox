@@ -64,3 +64,9 @@ when { resource.path like "status/*" && principal.relay == "team.example" };`;
   assert.equal(decide(perRelay, { principal: anyone.pid, path: "status/today.md", contacts, relay: "team.example" }).tier, "allow");
   assert.equal(decide(perRelay, { principal: anyone.pid, path: "status/today.md", contacts, relay: "partners.example" }).tier, "defer");
 });
+
+test("a signed policy's folders must be absolute paths", () => {
+  const justin = generateIdentity();
+  assert.equal(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, undefined, { team: "/Users/justin/team" }), toPeer(justin), 0).ok, true);
+  assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, undefined, { team: "team" }), toPeer(justin), 0), { ok: false, error: "policy folders are not absolute paths" });
+});

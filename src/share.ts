@@ -32,11 +32,31 @@ async function walk(dir: string, prefix = ""): Promise<string[]> {
 }
 
 export async function readShare(dir: string): Promise<{ readonly files: readonly ShareFile[]; readonly skipped: readonly Skipped[] }> {
+  return readRoots([["", dir]]);
+}
+
+/**
+ * The folders a signed policy names, each read under its name (team/plan.md),
+ * sharing one size budget. null means the policy names none: the share folder.
+ */
+export async function readShareFolders(folders: Readonly<Record<string, string>> | null, shareDir: string): Promise<{ readonly files: readonly ShareFile[]; readonly skipped: readonly Skipped[] }> {
+  if (folders === null) return readShare(shareDir);
+  return readRoots(Object.entries(folders).sort(([a], [b]) => (a < b ? -1 : 1)).map(([name, dir]) => [`${name}/`, dir] as const));
+}
+
+async function readRoots(roots: readonly (readonly [string, string])[]): Promise<{ readonly files: readonly ShareFile[]; readonly skipped: readonly Skipped[] }> {
   const files: ShareFile[] = [];
   const skipped: Skipped[] = [];
   let total = 0;
-  for (const path of await walk(dir)) {
-    const info = await lstat(join(dir, path));
+  for (const [prefix, dir] of roots) {
+    // A named folder that is itself a symlink could be repointed after the policy was signed.
+    if (prefix !== "" && (await lstat(dir).then((i) => i.isSymbolicLink(), () => false))) {
+      skipped.push({ path: prefix, reason: "symlink" });
+      continue;
+    }
+    for (const rel of await walk(dir)) {
+    const path = prefix + rel;
+    const info = await lstat(join(dir, rel));
     if (info.isSymbolicLink()) {
       skipped.push({ path, reason: "symlink" });
       continue;
@@ -50,7 +70,7 @@ export async function readShare(dir: string): Promise<{ readonly files: readonly
       skipped.push({ path, reason: "over total budget" });
       continue;
     }
-    const bytes = await readFile(join(dir, path));
+    const bytes = await readFile(join(dir, rel));
     let content: string;
     try {
       content = strictUtf8.decode(bytes);
@@ -64,6 +84,7 @@ export async function readShare(dir: string): Promise<{ readonly files: readonly
     }
     total += info.size;
     files.push({ path, content });
+    }
   }
   return { files, skipped };
 }

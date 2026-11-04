@@ -6,6 +6,7 @@ import type { LoadedPolicy } from "./daemon-files.ts";
 import { readHome } from "./home.ts";
 import type { Inbound } from "./mailbox.ts";
 import type { ResponderConfig, ResponderResult } from "./responder.ts";
+import type { Settings } from "./settings.ts";
 import type { ShareFile } from "./share.ts";
 
 // The daemon's imperative shell: one tick syncs, works out which asks it
@@ -18,7 +19,10 @@ export type DaemonDeps = {
   readonly client: ClientDeps;
   /** The verified policy, or why it could not be loaded. Read every tick so a re-signed policy applies without a restart. */
   readonly policy: () => Promise<LoadedPolicy>;
-  readonly share: () => Promise<readonly ShareFile[]>;
+  /** Reads the folders the signed policy names, or the share folder when it names none. */
+  readonly share: (folders: Readonly<Record<string, string>> | null) => Promise<readonly ShareFile[]>;
+  /** config.toml's [daemon] settings, read every tick. Absent: the defaults. */
+  readonly settings?: () => Promise<{ readonly ok: true; readonly daemon: Settings["daemon"] } | { readonly ok: false; readonly error: string }>;
   /** Runs the responder the signed policy names. */
   readonly respond: (prompt: string, responder: ResponderConfig) => Promise<ResponderResult>;
   readonly audit: (event: AuditEvent) => Promise<void>;
@@ -45,16 +49,20 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
   const owed = unanswered(home.state, { me: home.me.pid, since: deps.since }).filter((ask) => !handled.done.has(keyOf(ask)));
   if (owed.length === 0) return handled;
 
-  const [policy, files] = await Promise.all([deps.policy(), deps.share()]);
+  const [policy, settings] = await Promise.all([deps.policy(), deps.settings?.() ?? { ok: true as const, daemon: { answer: true, poll_seconds: 30, contacts: ["*"] } }]);
+  const files = await deps.share(policy.ok ? policy.folders ?? null : null);
   const contacts = new Set(home.contacts.keys());
   const done = new Set(handled.done);
   const drafts = new Map(handled.drafts);
   for (const ask of owed) {
     const key = keyOf(ask);
     const askerName = home.contacts.get(ask.from)?.name ?? ask.from;
-    const plan: Plan = policy.ok
+    const planned: Plan = policy.ok
       ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder, askerRelay: hostOf(ask.relay) })
       : { kind: "defer", reason: `policy unavailable: ${policy.error}` };
+    // The config can only hold the daemon back, never widen what the signed policy allows.
+    const held = planned.kind === "ignore" ? null : heldBack(settings, askerName);
+    const plan: Plan = held === null ? planned : { kind: "defer", reason: held };
     const about = { ref: ask.body.ref, from: ask.from };
     try {
       await deps.audit({
@@ -87,6 +95,15 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
     }
   }
   return { done, drafts };
+}
+
+/** Why config.toml holds the daemon back from answering this asker, or null. */
+function heldBack(settings: NonNullable<Awaited<ReturnType<NonNullable<DaemonDeps["settings"]>>>>, askerName: string): string | null {
+  if (!settings.ok) return `config.toml has errors (${settings.error}); run mailbox doctor`;
+  if (!settings.daemon.answer) return "daemon.answer is false in config.toml";
+  const contacts = settings.daemon.contacts.map((c) => c.toLowerCase());
+  if (!contacts.includes("*") && !contacts.includes(askerName.toLowerCase())) return `${askerName} isn't in daemon.contacts in config.toml`;
+  return null;
 }
 
 /** Ticks every intervalMs until aborted. A failed tick is logged and the next one tries again. */
