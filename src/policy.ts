@@ -67,7 +67,7 @@ export function decide(
     readonly principal: Pid;
     readonly path: string;
     readonly contacts: ReadonlySet<Pid>;
-    /** The host of the relay the asker came through, as principal.relay: per-relay rules are policy, not prompt. */
+    /** The host of the relay the ask was fetched from, as principal.relay: per-relay rules are policy, not prompt. */
     readonly relay?: string;
   },
 ): { readonly tier: Tier; readonly policies: readonly string[] } {

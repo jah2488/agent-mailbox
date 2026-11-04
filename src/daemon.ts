@@ -36,6 +36,7 @@ export const fresh: Handled = { done: new Set(), drafts: new Map() };
 
 const keyOf = (ask: Inbound) => `${ask.from}/${ask.seq}`;
 
+// Where the ask actually arrived, not the relay the sender's invite named. Mail with no record of it matches no relay rule.
 const hostOf = (relay: string | undefined) => (relay === undefined ? "" : new URL(relay).host);
 
 export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled> {
@@ -52,7 +53,7 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
     const key = keyOf(ask);
     const askerName = home.contacts.get(ask.from)?.name ?? ask.from;
     const plan: Plan = policy.ok
-      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder, askerRelay: hostOf(home.contacts.get(ask.from)?.relay) })
+      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder, askerRelay: hostOf(ask.relay) })
       : { kind: "defer", reason: `policy unavailable: ${policy.error}` };
     const about = { ref: ask.body.ref, from: ask.from };
     try {

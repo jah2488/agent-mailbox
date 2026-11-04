@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AuditEvent } from "./audit.ts";
-import { receive, send } from "./client.ts";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { receive, send, sync } from "./client.ts";
 import { fresh, runDaemon, tick, type DaemonDeps } from "./daemon.ts";
 import { DEFAULT_POLICY } from "./policy.ts";
 import { DEFAULT_RESPONDER, type ResponderResult } from "./responder.ts";
@@ -188,4 +190,22 @@ when { resource.path like "status/*" && principal.relay == "relay.test" };`;
   await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
   await tick(deps, fresh);
   assert.equal((daemon.audit[0]!.data as { outcome: string }).outcome, "ask-model");
+});
+
+test("the policy sees the relay an ask actually arrived through, not the one the sender's invite named", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  const relayOnly = `@tier("allow")
+permit(principal in Group::"contacts", action == Action::"read", resource)
+when { resource.path like "status/*" && principal.relay == "relay.test" };`;
+  const deps: DaemonDeps = { ...daemon.deps, policy: async () => ({ ok: true, cedar: relayOnly, version: 7, responder: DEFAULT_RESPONDER, hash: "b2:policy" }) };
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await sync(bob.deps);
+  const state = JSON.parse(await readFile(join(bob.deps.dir, "state.json"), "utf8"));
+  assert.equal(state.inbox[0].relay, "https://relay.test", "sync records where each message came from");
+  state.inbox[0].relay = "https://elsewhere.test"; // as if it arrived through another relay
+  await writeFile(join(bob.deps.dir, "state.json"), JSON.stringify(state));
+
+  await tick(deps, fresh);
+  assert.equal((daemon.audit[0]!.data as { outcome: string }).outcome, "defer");
 });

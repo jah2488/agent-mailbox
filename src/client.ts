@@ -254,7 +254,7 @@ async function syncUnlocked(deps: ClientDeps, home: Home, acting: Acting): Promi
         if (res.status !== 200) throw new Error(await describeFailure(res));
         const opened = open(new Uint8Array(await res.arrayBuffer()), { me: acting.box, roster: home.contacts, chains: chainsOf(state) });
         if (opened.ok) {
-          const admitted = admit(state, opened, deps.now().toISOString());
+          const admitted = admit(state, opened, deps.now().toISOString(), relay);
           state = admitted.state;
           if (admitted.refused) errors.push(`${sender.name}: refused mail from revoked agent "${opened.via.kind === "agent" ? opened.via.name : "?"}" at seq ${seq}`);
           else received++;

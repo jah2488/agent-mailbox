@@ -20,6 +20,8 @@ export type Inbound = {
   readonly via: Via;
   /** 0 for a first-hand message; agents raise it, and only 0 is ever answered automatically. */
   readonly hops: number;
+  /** The relay this message was fetched from. Absent on mail received before it was recorded. */
+  readonly relay?: string;
 };
 
 export type Outbound = {
@@ -83,9 +85,9 @@ export function pendingDelivery(state: MailboxState): readonly Outbound[] {
   return state.outbox.filter((m) => !m.delivered);
 }
 
-export function recordReceived(state: MailboxState, opened: Opened, receivedAt: string): MailboxState {
+export function recordReceived(state: MailboxState, opened: Opened, receivedAt: string, relay?: string): MailboxState {
   const { header, body, hash, chain, via } = opened;
-  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt, via, hops: header.hops };
+  const inbound: Inbound = { from: header.from, to: header.to, seq: header.seq, hash, ts: header.ts, body, consumed: false, receivedAt, via, hops: header.hops, ...(relay === undefined ? {} : { relay }) };
   return { ...state, chains: { ...state.chains, [header.from]: chain }, inbox: [...state.inbox, inbound] };
 }
 
@@ -97,13 +99,13 @@ const REVOKE_HASH = /^b2:[0-9a-f]{64}$/;
  * cutoff is refused, but its chain link is kept, so the sender's later mail
  * still connects. A :revoke counts only when the person's root signed it.
  */
-export function admit(state: MailboxState, opened: Opened, receivedAt: string): { readonly state: MailboxState; readonly refused: boolean } {
+export function admit(state: MailboxState, opened: Opened, receivedAt: string, relay?: string): { readonly state: MailboxState; readonly refused: boolean } {
   const { header, body, via } = opened;
   if (header.cert !== undefined) {
     const cutoff = state.revoked[`${header.from} ${certHash(header.cert)}`];
     if (cutoff !== undefined && header.seq > cutoff) return { state: { ...state, chains: { ...state.chains, [header.from]: opened.chain } }, refused: true };
   }
-  const received = recordReceived(state, opened, receivedAt);
+  const received = recordReceived(state, opened, receivedAt, relay);
   const revoke = body.payload as { cert_hash?: unknown; effective_seq?: unknown } | null;
   if (body.tag !== "revoke" || via.kind !== "owner" || typeof revoke?.cert_hash !== "string" || !REVOKE_HASH.test(revoke.cert_hash) || !Number.isSafeInteger(revoke.effective_seq)) {
     return { state: received, refused: false };
