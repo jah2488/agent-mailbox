@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateIdentity, type Pid } from "./identity.ts";
-import { applyEvent, checkEvent, isAdmitted, parseJoinRule, signEvent, type MemberRecord, type MembershipEvent } from "./membership.ts";
+import { applyEvent, checkEvent, isAdmitted, isGuest, parseJoinRule, signEvent, type MemberRecord, type MembershipEvent } from "./membership.ts";
 import { rootEntry } from "./roots.ts";
 
 const founder = generateIdentity();
@@ -90,4 +90,43 @@ test("vouching for someone who's already a member is a verified no-op, whatever 
   const already = { ...ctx({ kind: "closed" }), members: new Map([...ctx().members, [newcomer.pid, newcomer]]) };
   assert.deepEqual(checkEvent(signEvent(vouch(founder), founder.signSec), already), { ok: true, event: vouch(founder), alreadyMember: true });
   assert.deepEqual(checkEvent(signEvent(vouch(founder), other.signSec), already), { ok: false, status: 401, error: "bad_signature" });
+});
+
+test("hosting makes a guest, not a member; unhosting and an admin's removal take it back", () => {
+  const anyMember = { kind: "any-member" } as const;
+  const hosted = replay([event("host", founder)]);
+  assert.equal(isAdmitted(hosted, anyMember), false, "a guest is never a member");
+  assert.equal(isGuest(hosted, anyMember), true);
+  assert.equal(isGuest(replay([event("host", founder), event("unhost", founder)]), anyMember), false);
+  assert.equal(isGuest(replay([event("host", founder), event("host", other), event("unhost", founder)]), anyMember), true, "another host still counts");
+  const removed = replay([event("host", founder), event("remove", admin)]);
+  assert.equal(isGuest(removed, anyMember), false);
+  assert.deepEqual(applyEvent(removed, event("host", other), false), { ok: false, status: 403, error: "removed_by_admin" });
+  assert.equal(isGuest(replay([event("host", founder)]), { kind: "closed" }), false);
+  assert.equal(isAdmitted(replay([event("host", founder), vouch(other)]), anyMember), true, "a vouch still admits a guest as a member");
+});
+
+test("records written before guests existed still read as having no hosts", () => {
+  const old = { member: rootEntry(newcomer), vouchers: [founder.pid], removed: false } as unknown as MemberRecord;
+  const twoVouches = { kind: "vouches", count: 2 } as const;
+  assert.equal(isGuest(old, twoVouches), false);
+  const hosted = applyEvent(old, event("host", other), false);
+  assert.ok(hosted.ok);
+  assert.equal(isGuest(hosted.record, twoVouches), true);
+  assert.deepEqual(hosted.record.vouchers, [founder.pid], "hosting leaves existing vouches alone");
+});
+
+test("any member may host whatever the join rule, except on a closed relay; founders can't be unhosted", () => {
+  assert.equal(checkEvent(signEvent(event("host", founder), founder.signSec), ctx({ kind: "admins" })).ok, true);
+  assert.equal(checkEvent(signEvent(event("host", founder), founder.signSec), ctx({ kind: "vouches", count: 3 })).ok, true);
+  assert.deepEqual(checkEvent(signEvent(event("host", founder), founder.signSec), ctx({ kind: "closed" })), { ok: false, status: 403, error: "join_closed" });
+  assert.deepEqual(checkEvent(signEvent(event("unhost", admin, founder), admin.signSec), ctx()), { ok: false, status: 400, error: "is_founder" });
+  const already = { ...ctx(), members: new Map([...ctx().members, [newcomer.pid, newcomer]]) };
+  assert.deepEqual(checkEvent(signEvent(event("host", founder), founder.signSec), already), { ok: true, event: event("host", founder), alreadyMember: true });
+});
+
+test("an admin's removal ends hosting for good: an admin's later vouch doesn't bring old hosts back", () => {
+  const twoVouches = { kind: "vouches", count: 2 } as const;
+  assert.equal(isGuest(replay([event("host", founder), event("remove", admin), vouch(admin)]), twoVouches), false);
+  assert.equal(isGuest(replay([event("host", founder), vouch(other)]), { kind: "any-member" }), false, "a member is never also a guest");
 });

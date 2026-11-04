@@ -71,7 +71,7 @@ An agent cert is `{"c": {"v": 1, "person", "agent_sign_pub", "name", "device", "
 
 Write rules:
 
-- **Who may write:** the relay accepts only envelopes whose sender and recipient are both members (see Membership).
+- **Who may write:** the relay accepts only envelopes whose sender is a member and whose recipient is a member or a guest the sender hosts (see Membership).
 - **Write-once:** a `(sender, seq)` is written once. The same bytes again is `200`, and different bytes are refused with `409 fork`.
 - **Chain:** seq 0 has `prev: null`. Any later seq must name the hash of the stored seq before it (`409 gap` or `409 chain_mismatch` otherwise).
 - **Agent certs:** an envelope signed by an agent key must carry a cert its person's root signed, valid both when the envelope says it was sent and now.
@@ -81,7 +81,7 @@ Write rules:
 |---|---|---|
 | 400 | `malformed`, `non_canonical`, `unsupported` | not an envelope, not in canonical form, or an unknown `v` |
 | 400 | `path_mismatch` | the path's pid or seq differs from the header's |
-| 400 | `unknown_recipient` | the recipient isn't a member |
+| 400 | `unknown_recipient` | the recipient is neither a member nor a guest the sender hosts |
 | 401 | `bad_cert`, `bad_signature` | the cert or the envelope signature doesn't verify |
 | 403 | `unknown_sender` | the sender isn't a member |
 | 409 | `fork`, `gap`, `chain_mismatch` | see above |
@@ -104,7 +104,7 @@ Both reads need `Authorization: AgentMailbox <claim>`, where `<claim>` is the ba
 }
 ```
 
-`s` signs `agent-mailbox/v1/request\n` followed by the canonical JSON of every other field. The signer is the reader's root key, or an agent key whose cert is in `c`. The relay accepts a claim only for the exact method, host and path it received, with `t` within 5 minutes of its clock, and spends the nonce, so reusing it gets `401 replayed`.
+`s` signs `agent-mailbox/v1/request\n` followed by the canonical JSON of every other field. Members and guests may read. The signer is the reader's root key, or an agent key whose cert is in `c`. The relay accepts a claim only for the exact method, host and path it received, with `t` within 5 minutes of its clock, and spends the nonce, so reusing it gets `401 replayed`.
 
 Routes:
 
@@ -117,13 +117,15 @@ An unsigned or invalid read is `401 unauthorized`. Listing someone else's inbox 
 
 A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by vouch. Entries in `MAILBOX_ROOTS` with `"admin": true` are admins. Founders are managed only by the operator, through `MAILBOX_ROOTS`.
 
+A member can also host a **guest**: someone whose home is another relay. A guest can read mail addressed to them on this relay and nothing else. They can't send through it, and only their hosts can write new mail to them. A host counts only while they are a member. Each side of a cross-relay connection hosts the other on their own relay, so mail always sits on its sender's relay and the recipient fetches it from there.
+
 `POST /members` (`content-type: application/json`) takes a membership event signed by its actor's root:
 
 ```json
 {
   "e": {
     "v": 1,
-    "kind": "vouch | withdraw | remove",
+    "kind": "vouch | withdraw | remove | host | unhost",
     "relay": "<this relay's host>",
     "member": { "pid", "sign_pub", "box_pub" },
     "by": "<actor pid>",
@@ -147,17 +149,18 @@ A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by v
 | `vouches:N` | any member | N different members |
 | `closed` | nobody | only founders are members |
 
-The join rule governs new joins only: people already admitted stay when it changes, and an admin can remove anyone individually.
+The join rule governs new joins only: people already admitted stay when it changes, and an admin can remove anyone individually. Hosting doesn't count as joining, so any member may host under every rule except `closed`, which refuses it with `join_closed`.
 
-The relay keeps one record per member, holding who currently vouches for them and whether an admin removed them:
+The relay keeps one record per member, holding who currently vouches for them, who hosts them, and whether an admin removed them:
 - **Withdraw:** a member takes back their own vouch.
-- **Remove:** an admin removes someone. The removal sticks: while it stands, only an admin's vouch is accepted for that person, and anyone else's is refused with `removed_by_admin`.
-- **Founders:** withdrawing or removing a founder is refused with `is_founder`.
-- **No-op vouch:** a vouch for someone who's already a member is answered `200 {"admitted": true}` and changes nothing.
+- **Unhost:** a member stops hosting a guest. A guest with no hosts left, or whose hosts are no longer members, can no longer read.
+- **Remove:** an admin removes someone, member or guest, clearing their vouches and hosts. The removal sticks: while it stands, only an admin's vouch or host is accepted for that person, and anyone else's is refused with `removed_by_admin`.
+- **Founders:** withdrawing, unhosting or removing a founder is refused with `is_founder`.
+- **No-op vouch:** a vouch or host for someone who's already a member is answered `200 {"admitted": true}` and changes nothing.
 - **Cap:** a relay holds at most 1,000 member records; past that, new people are refused with `relay_full`.
 
 Responses:
-- **Applied:** `201 {"member": "<pid>", "admitted": true | false}`.
+- **Applied:** `201 {"member": "<pid>", "admitted": true | false}`, plus `"guest": true` when the person is now a guest.
 - **Refused:**
   - `403`: `not_a_member`, `admins_only`, `join_closed` or `removed_by_admin`;
   - `401`: `bad_signature`;

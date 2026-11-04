@@ -9,11 +9,14 @@ import sodium from "./sodium.ts";
 // removed them), so storage grows with people rather than with requests.
 // A voucher can withdraw their vouch; an admin's removal sticks until an
 // admin vouches for them again. The join rule says how many vouches admit.
+// A member can also host someone whose home is another relay: a guest reads
+// mail their hosts send them here and nothing else. Guests don't count toward
+// the join rule (they can't send), but a closed relay hosts no one.
 
 export type JoinRule = { readonly kind: "any-member" } | { readonly kind: "admins" } | { readonly kind: "vouches"; readonly count: number } | { readonly kind: "closed" };
 export type MembershipEvent = {
   readonly v: 1;
-  readonly kind: "vouch" | "withdraw" | "remove";
+  readonly kind: "vouch" | "withdraw" | "remove" | "host" | "unhost";
   /** The relay's host: an event signed for one relay is refused by every other. */
   readonly relay: string;
   readonly member: RootEntry;
@@ -24,7 +27,7 @@ export type SignedEvent = { readonly e: MembershipEvent; readonly s: string };
 
 const DOMAIN = "agent-mailbox/v1/membership\n";
 const MAX_SKEW_MS = 5 * 60_000;
-const KINDS = new Set(["vouch", "withdraw", "remove"]);
+const KINDS = new Set(["vouch", "withdraw", "remove", "host", "unhost"]);
 // Exactly what toISOString writes: anything looser could sort or nest unexpectedly in storage keys.
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const b64url = (bytes: Uint8Array) => sodium.to_base64(bytes, sodium.base64_variants.URLSAFE_NO_PADDING);
@@ -43,8 +46,11 @@ export function signEvent(event: MembershipEvent, signSec: Uint8Array): SignedEv
   return { e: event, s: b64url(sodium.crypto_sign_detached(signedBytes(event), signSec)) };
 }
 
-/** What the relay keeps about one admitted-or-not member. */
-export type MemberRecord = { readonly member: RootEntry; readonly vouchers: readonly string[]; readonly removed: boolean };
+/** What the relay keeps about one admitted-or-not member. hosts is absent on records from before guests. */
+export type MemberRecord = { readonly member: RootEntry; readonly vouchers: readonly string[]; readonly hosts?: readonly string[]; readonly removed: boolean };
+
+const without = (list: readonly string[], pid: string) => list.filter((p) => p !== pid);
+const including = (list: readonly string[], pid: string) => (list.includes(pid) ? list : [...list, pid]);
 
 /** The record after one checked event, or why the event can't apply to this member as they stand. */
 export function applyEvent(
@@ -52,17 +58,24 @@ export function applyEvent(
   event: MembershipEvent,
   actorIsAdmin: boolean,
 ): { readonly ok: true; readonly record: MemberRecord } | { readonly ok: false; readonly status: number; readonly error: string } {
-  const current = record ?? { member: event.member, vouchers: [], removed: false };
-  if (event.kind === "remove") return { ok: true, record: { member: current.member, vouchers: [], removed: true } };
-  if (event.kind === "withdraw") return { ok: true, record: { ...current, vouchers: current.vouchers.filter((by) => by !== event.by) } };
+  const current = { hosts: [], ...(record ?? { member: event.member, vouchers: [], removed: false }) };
+  if (event.kind === "remove") return { ok: true, record: { member: current.member, vouchers: [], hosts: [], removed: true } };
+  if (event.kind === "withdraw") return { ok: true, record: { ...current, vouchers: without(current.vouchers, event.by) } };
+  if (event.kind === "unhost") return { ok: true, record: { ...current, hosts: without(current.hosts, event.by) } };
   if (current.removed && !actorIsAdmin) return { ok: false, status: 403, error: "removed_by_admin" };
-  const vouchers = current.vouchers.includes(event.by) ? current.vouchers : [...current.vouchers, event.by];
-  return { ok: true, record: { member: current.member, vouchers, removed: false } };
+  if (event.kind === "host") return { ok: true, record: { ...current, hosts: including(current.hosts, event.by), removed: false } };
+  return { ok: true, record: { ...current, vouchers: including(current.vouchers, event.by), removed: false } };
 }
 
 export function isAdmitted(record: MemberRecord | undefined, rule: JoinRule): boolean {
   if (record === undefined || record.removed || rule.kind === "closed") return false;
   return record.vouchers.length >= (rule.kind === "vouches" ? rule.count : 1);
+}
+
+/** Hosted by at least one member and not a member themselves: may read what their hosts send them here, nothing more. */
+export function isGuest(record: MemberRecord | undefined, rule: JoinRule): boolean {
+  if (record === undefined || record.removed || rule.kind === "closed" || isAdmitted(record, rule)) return false;
+  return (record.hosts ?? []).length > 0;
 }
 
 export type EventContext = {
@@ -108,10 +121,11 @@ export function checkEvent(
   if (event.relay !== ctx.host) return { ok: false, status: 400, error: "wrong_relay" };
   if (!(Math.abs(Date.parse(event.ts) - ctx.now.getTime()) <= MAX_SKEW_MS)) return { ok: false, status: 400, error: "stale" };
   // Adding someone who's already in, a founder say, changes nothing and needs no join rule.
-  if (event.kind === "vouch" && ctx.members.has(event.member.pid as Pid)) return { ok: true, event, alreadyMember: true };
-  if (event.kind !== "vouch" && ctx.founders.has(event.member.pid as Pid)) return { ok: false, status: 400, error: "is_founder" };
+  const admits = event.kind === "vouch" || event.kind === "host";
+  if (admits && ctx.members.has(event.member.pid as Pid)) return { ok: true, event, alreadyMember: true };
+  if (!admits && ctx.founders.has(event.member.pid as Pid)) return { ok: false, status: 400, error: "is_founder" };
   const isAdmin = ctx.admins.has(actor.pid);
-  if (event.kind === "vouch" && ctx.rule.kind === "closed") return { ok: false, status: 403, error: "join_closed" };
+  if (admits && ctx.rule.kind === "closed") return { ok: false, status: 403, error: "join_closed" };
   if (event.kind === "vouch" && ctx.rule.kind === "admins" && !isAdmin) return { ok: false, status: 403, error: "admins_only" };
   if (event.kind === "remove" && !isAdmin) return { ok: false, status: 403, error: "admins_only" };
   return { ok: true, event };

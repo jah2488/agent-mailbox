@@ -1,6 +1,6 @@
 import { hashOf, verifyOuter, type OuterError } from "./envelope.ts";
 import { CHALLENGE_PATTERN, describeRelay, WELL_KNOWN_PATH, type RelayKey } from "./relay-identity.ts";
-import { applyEvent, checkEvent, isAdmitted, type JoinRule, type MemberRecord } from "./membership.ts";
+import { applyEvent, checkEvent, isAdmitted, isGuest, type JoinRule, type MemberRecord } from "./membership.ts";
 import { readRootEntry } from "./roots.ts";
 import type { Peer, Pid } from "./identity.ts";
 import { verifyRequest } from "./request-auth.ts";
@@ -57,32 +57,49 @@ async function readRecord(store: Store, pid: string): Promise<MemberRecord | und
   if (bytes === null) return undefined;
   try {
     const r = JSON.parse(new TextDecoder().decode(bytes)) as Partial<MemberRecord>;
-    const valid = typeof r.member === "object" && r.member !== null && Array.isArray(r.vouchers) && r.vouchers.every((v) => typeof v === "string") && typeof r.removed === "boolean";
+    const strings = (list: unknown) => Array.isArray(list) && list.every((v) => typeof v === "string");
+    const valid = typeof r.member === "object" && r.member !== null && strings(r.vouchers) && (r.hosts === undefined || strings(r.hosts)) && typeof r.removed === "boolean";
     return valid ? (r as MemberRecord) : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** The founders plus everyone their records admit. Only routes that check membership pay for this. */
-async function effectiveRoots(deps: RelayDeps): Promise<ReadonlyMap<Pid, Peer>> {
-  if (deps.join === undefined || deps.join.kind === "closed") return deps.roots;
+/** Someone hosted from another relay: readable by their own signed reads, mailable only by their hosts. */
+type Guest = { readonly peer: Peer; readonly hosts: ReadonlySet<Pid> };
+/** Deps for the mail routes: roots widened to every current member, plus the guests. */
+type MailDeps = RelayDeps & { readonly guests: ReadonlyMap<Pid, Guest> };
+
+/** The founders plus everyone their records admit, and the guests. Only routes that check membership pay for this. */
+async function effectiveMembers(deps: RelayDeps): Promise<{ readonly members: ReadonlyMap<Pid, Peer>; readonly guests: ReadonlyMap<Pid, Guest> }> {
+  if (deps.join === undefined || deps.join.kind === "closed") return { members: deps.roots, guests: new Map() };
   const join = deps.join;
   const keys = await deps.store.list(MEMBERS);
   const records = await Promise.all(keys.map((key) => readRecord(deps.store, key.slice(MEMBERS.length))));
+  const peerOf = (record: MemberRecord) => {
+    const peer = readRootEntry(record.member);
+    return typeof peer === "string" || deps.roots.has(peer.pid) ? null : peer;
+  };
   const admitted = records.flatMap((record) => {
-    const peer = record === undefined || !isAdmitted(record, join) ? null : readRootEntry(record.member);
-    return peer === null || typeof peer === "string" ? [] : [[peer.pid, peer] as const];
+    const peer = record === undefined || !isAdmitted(record, join) ? null : peerOf(record);
+    return peer === null ? [] : [[peer.pid, peer] as const];
   });
   // Founders last, so no record can shadow a founder's keys.
-  return new Map([...admitted, ...deps.roots]);
+  const members = new Map([...admitted, ...deps.roots]);
+  // A host who has since left the relay hosts no one: only current members' hosting counts.
+  const guests = records.flatMap((record) => {
+    const peer = record === undefined || !isGuest(record, join) ? null : peerOf(record);
+    const hosts = (record?.hosts ?? []).filter((pid) => members.has(pid as Pid)) as Pid[];
+    return peer === null || hosts.length === 0 ? [] : [[peer.pid, { peer, hosts: new Set(hosts) }] as const];
+  });
+  return { members, guests: new Map(guests) };
 }
 
 async function postMember(req: Request, url: URL, deps: RelayDeps): Promise<Response> {
   const contentType = (req.headers.get("content-type") ?? "").split(";")[0]?.trim();
   if (contentType !== "application/json") return refuse(415, "content_type_must_be_application_json");
   const body: unknown = await req.json().catch(() => null);
-  const members = await effectiveRoots(deps);
+  const { members } = await effectiveMembers(deps);
   const admins = deps.admins ?? new Set<Pid>();
   const checked = checkEvent(body, { host: url.host, now: deps.now(), rule: deps.join ?? { kind: "closed" }, members, founders: new Set(deps.roots.keys()), admins });
   if (!checked.ok) return refuse(checked.status, checked.error);
@@ -94,7 +111,8 @@ async function postMember(req: Request, url: URL, deps: RelayDeps): Promise<Resp
   const applied = applyEvent(record, event, admins.has(event.by as Pid));
   if (!applied.ok) return refuse(applied.status, applied.error);
   await deps.store.put(memberKey(member), new TextEncoder().encode(JSON.stringify(applied.record)));
-  return reply(201, { member, admitted: isAdmitted(applied.record, deps.join ?? { kind: "closed" }) });
+  const rule = deps.join ?? { kind: "closed" as const };
+  return reply(201, { member, admitted: isAdmitted(applied.record, rule), ...(isGuest(applied.record, rule) ? { guest: true } : {}) });
 }
 
 const PID = "[a-z2-7]{16}";
@@ -134,7 +152,7 @@ export async function handle(req: Request, given: RelayDeps): Promise<Response> 
   }
   // Mail routes check membership; the identity probe and unknown paths never pay for it.
   const routed = LOG_ROUTE.test(url.pathname) || INBOX_ROUTE.test(url.pathname);
-  const deps = routed ? { ...given, roots: await effectiveRoots(given) } : given;
+  const deps: MailDeps = routed ? await withMembers(given) : { ...given, guests: new Map() };
   if (url.pathname === WELL_KNOWN_PATH) {
     if (req.method !== "GET") return refuse(405, "method_not_allowed");
     if (deps.identity === undefined) return refuse(503, "relay_has_no_key");
@@ -158,7 +176,12 @@ export async function handle(req: Request, given: RelayDeps): Promise<Response> 
   return refuse(404, "not_found");
 }
 
-async function putEnvelope(from: Pid, seq: number, req: Request, { store, roots, now }: RelayDeps): Promise<Response> {
+async function withMembers(given: RelayDeps): Promise<MailDeps> {
+  const { members, guests } = await effectiveMembers(given);
+  return { ...given, roots: members, guests };
+}
+
+async function putEnvelope(from: Pid, seq: number, req: Request, { store, roots, guests, now }: MailDeps): Promise<Response> {
   // netlify dev delivers an empty body when content-type is missing; naming
   // the header here beats a "malformed" that sends people hunting the envelope.
   const contentType = (req.headers.get("content-type") ?? "").split(";")[0]?.trim();
@@ -168,7 +191,7 @@ async function putEnvelope(from: Pid, seq: number, req: Request, { store, roots,
   if (!outer.ok) return refuse(OUTER_STATUS[outer.error], outer.error);
   const { header } = outer;
   if (header.from !== from || header.seq !== seq) return refuse(400, "path_mismatch");
-  if (!roots.has(header.to)) return refuse(400, "unknown_recipient");
+  if (!roots.has(header.to) && guests.get(header.to)?.hosts.has(from) !== true) return refuse(400, "unknown_recipient");
 
   const key = logKey(from, seq);
   const stored = await store.get(key);
@@ -199,9 +222,10 @@ async function settleExisting(stored: Uint8Array, wire: Uint8Array, to: Pid, fro
 }
 
 /** Verifies a signed read and spends its nonce. Returns the caller's pid, or a refusal. */
-async function authorize(req: Request, url: URL, { store, roots, now }: RelayDeps): Promise<Pid | Response> {
+async function authorize(req: Request, url: URL, { store, roots, guests, now }: MailDeps): Promise<Pid | Response> {
   const target = { method: req.method, host: url.host, path: url.pathname + url.search };
-  const auth = verifyRequest(req.headers.get("authorization"), target, roots, now());
+  const readers = new Map([...[...guests].map(([pid, guest]) => [pid, guest.peer] as const), ...roots]);
+  const auth = verifyRequest(req.headers.get("authorization"), target, readers, now());
   if (!auth.ok) return refuse(401, "unauthorized");
   // Hash the nonce so a caller-chosen string never becomes a raw storage key.
   // The minute bucket lets a future sweep drop whole buckets. A ts signed at
@@ -213,7 +237,7 @@ async function authorize(req: Request, url: URL, { store, roots, now }: RelayDep
   return auth.pid;
 }
 
-async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps: RelayDeps): Promise<Response> {
+async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps: MailDeps): Promise<Response> {
   const caller = await authorize(req, url, deps);
   if (caller instanceof Response) return caller;
   // One answer for "absent", "not yours" and "sender since removed from the
@@ -227,7 +251,7 @@ async function getEnvelope(from: Pid, seq: number, req: Request, url: URL, deps:
   return new Response(wire, { status: 200, headers: { "content-type": "application/json" } });
 }
 
-async function listInbox(to: Pid, req: Request, url: URL, deps: RelayDeps): Promise<Response> {
+async function listInbox(to: Pid, req: Request, url: URL, deps: MailDeps): Promise<Response> {
   const caller = await authorize(req, url, deps);
   if (caller instanceof Response) return caller;
   if (caller !== to) return refuse(403, "forbidden");

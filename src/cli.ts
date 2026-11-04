@@ -50,7 +50,7 @@ const USAGE = [
   "  status                               who you are, what to share, and what's running",
   "  whoami                               your name, relay and fingerprint",
   "  invite [--print]                     copy the command a teammate runs to add you",
-  "  peer add <invite>                    add a teammate from their invite (and vouch for them on your relay)",
+  "  peer add <invite>                    add someone from their invite (and vouch for or host them on your relay)",
   "  peer remove <name>                   drop a contact and withdraw your vouch for them",
   "  relay remove <name>                  admins: remove someone from your relay",
   "  peers                                list contacts with fingerprints",
@@ -251,11 +251,12 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
   io.out(`${s.accent("Added")} ${s.bold(them.name)} on ${new URL(them.relay).host}.`);
   io.out(s.dim(`Their fingerprint is ${fingerprintOf(them.signPub)}.`));
   const me = (await readHome(io.deps.dir)).me;
-  // On my own relay, adding someone is also my vouch for them there.
-  const vouch = them.relay === me.relay ? await membership(io.deps, "vouch", them) : null;
-  if (vouch !== null) io.out(vouchMessage(them.name, vouch));
+  // Adding someone also lets them in on my relay: as a member if it's their home too, else as a guest who reads what I send.
+  const kind = them.relay === me.relay ? "vouch" : "host";
+  const joined = await membership(io.deps, kind, them);
+  io.out(joinMessage(them.name, kind, joined));
   // Only say hello once the relay will deliver it: a refused message would hold up everything queued behind it.
-  if (vouch !== null && !(vouch.ok && vouch.admitted)) return 0;
+  if (!(joined.ok && (joined.admitted || joined.guest))) return 0;
   const hello = await send(io.deps, { to: them.pid, tag: "hello", text: `I added you on agent-mailbox.` }).catch((error: Error) => ({ delivered: false, error: error.message }));
   io.out(
     hello.delivered
@@ -265,12 +266,13 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
   return 0;
 }
 
-function vouchMessage(name: string, result: MembershipResult): string {
+function joinMessage(name: string, kind: "vouch" | "host", result: MembershipResult): string {
+  if (result.ok && kind === "host") return `${name} can now read what you send them on your relay.`;
   if (result.ok) return result.admitted ? `Vouched for ${name} on your relay; they can send now.` : `Vouched for ${name}. Your relay needs more vouches before they can send.`;
   if (result.error === "admins_only") return `Your relay only lets admins add people. Ask an admin to run ${name}'s invite.`;
   if (result.error === "join_closed") return `Your relay's operator adds people. Send them ${name}'s invite.`;
   if (result.error === "removed_by_admin") return `An admin removed ${name} from your relay; only an admin can bring them back.`;
-  return `Couldn't vouch for ${name} on your relay (${result.error}).`;
+  return `Couldn't ${kind === "host" ? "host" : "vouch for"} ${name} on your relay (${result.error}).`;
 }
 
 /** A contact other than me, by name, ignoring case. */
@@ -279,7 +281,7 @@ function contactNamed(home: Home, name: string | undefined): Contact | null {
   return [...home.contacts.values()].find((c) => c.pid !== home.me.pid && c.name.toLowerCase() === wanted) ?? null;
 }
 
-/** Drops a contact and withdraws my vouch for them on my relay. */
+/** Drops a contact and withdraws my vouch for them (or stops hosting them) on my relay. */
 async function peerRemove(args: readonly string[], io: CliIo): Promise<number> {
   const home = await homeOrExplain(io);
   if (home === null) return 1;
@@ -296,7 +298,17 @@ async function peerRemove(args: readonly string[], io: CliIo): Promise<number> {
   if (open.length > 0) io.out(`Told ${them.name} you can't keep ${open.length} open promise${open.length === 1 ? "" : "s"}.`);
   await removeContact(io.deps.dir, them.pid);
   io.out(`Removed ${them.name} from your contacts.`);
-  if (them.relay !== home.me.relay) return 0;
+  if (them.relay !== home.me.relay) {
+    const unhosted = await membership(io.deps, "unhost", them);
+    io.out(
+      !unhosted.ok
+        ? `Couldn't stop hosting ${them.name} on your relay (${unhosted.error}).`
+        : unhosted.guest
+          ? `Stopped hosting ${them.name}; other members of your relay still host them.`
+          : `${them.name} can no longer read mail on your relay.`,
+    );
+    return 0;
+  }
   const withdrawn = await membership(io.deps, "withdraw", them);
   if (!withdrawn.ok && withdrawn.error === "is_founder") return 0; // founders are the operator's; there's no vouch to take back
   io.out(

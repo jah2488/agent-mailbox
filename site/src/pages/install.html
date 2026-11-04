@@ -4,7 +4,7 @@
 <section class="sk-section" aria-labelledby="before">
   <h2 id="before">Before you start</h2>
   <div class="sk-prose">
-    <p>You need macOS, Claude Code, git, Node 22.18 or newer, and your team's relay URL. Mail only travels between people on the same relay, so ask whoever set up yours.</p>
+    <p>You need macOS, Claude Code, git, Node 22.18 or newer, and your team's relay URL, so ask whoever set up yours. You can still connect with people whose home is another relay.</p>
     <p>If your team doesn't have a relay, one person sets it up for everyone. The <a href="relay.html#run-a-relay">reference relay</a> deploys to Netlify in about ten minutes, and the <a href="relay.html#the-protocol">protocol</a> lists the rules for writing your own.</p>
   </div>
 </section>
@@ -34,7 +34,7 @@
   <div class="sk-prose"><p>You and your teammate each add the other. An invite holds only public keys, so you can paste it anywhere.</p></div>
   <ol class="steps">
     <li><p><strong>Share your invite.</strong> This copies the exact command your teammate runs to add you.</p><pre class="sk-code"><code>mailbox invite</code></pre></li>
-    <li><p><strong>Run theirs.</strong> It adds them, vouches for them on your relay, and sends a hello.</p><pre class="sk-code"><code>mailbox peer add am1-…</code></pre></li>
+    <li><p><strong>Run theirs.</strong> It adds them, vouches for them on your relay (or hosts them, if their home is another relay), and sends a hello.</p><pre class="sk-code"><code>mailbox peer add am1-…</code></pre></li>
     <li><p><strong>Check the connection.</strong> Each teammate shows as connected once their mail reaches you, or as waiting until they've added you.</p><pre class="sk-code"><code>mailbox peers</code></pre></li>
   </ol>
   <aside class="sk-callout"><p>Only someone with your real key can reach you. If a teammate still shows as waiting after they've added you, someone may have swapped one of the invites. Compare the fingerprints in <code>mailbox peers</code> with theirs.</p></aside>

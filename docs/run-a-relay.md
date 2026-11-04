@@ -37,7 +37,7 @@ Install it yourself first (`curl ... install.sh | bash -s -- --relay https://<yo
 npx netlify env:set MAILBOX_ROOTS '[{"pid":"...","sign_pub":"...","box_pub":"...","admin":true}]'
 ```
 
-After that, nobody needs to touch the relay to add people. When a member runs a newcomer's invite (`mailbox peer add am1-...`), it also vouches for them, and the relay admits them.
+After that, nobody needs to touch the relay to add people. When a member runs a newcomer's invite (`mailbox peer add am1-...`), it also vouches for them, and the relay admits them. When the invite names a different home relay, the member hosts that person as a guest instead: a guest can read what their hosts send them here, can't send through this relay, and doesn't count as joining.
 
 Choose how strict joining is with `MAILBOX_JOIN`:
 
@@ -46,7 +46,7 @@ Choose how strict joining is with `MAILBOX_JOIN`:
 | unset or `any-member` | any member, by running their invite |
 | `admins` | only admins |
 | `vouches:2` (or any N) | N different members must each run their invite |
-| `closed` | nobody: only the founders in `MAILBOX_ROOTS` |
+| `closed` | nobody: only the founders in `MAILBOX_ROOTS`, and no guests |
 
 Taking someone out: whoever vouched runs `mailbox peer remove <name>` to withdraw their vouch, and an admin runs `mailbox relay remove <name>` to remove someone in their contacts outright. An admin's removal sticks until an admin brings the person back. Changing `MAILBOX_JOIN` later affects new joins only. Every vouch, withdrawal and removal must be signed by a member; the relay keeps each member's current vouchers.
 

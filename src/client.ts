@@ -22,7 +22,7 @@ import {
   type Pattern,
 } from "./mailbox.ts";
 import { ledger, type Commitment } from "./promises.ts";
-import { signEvent } from "./membership.ts";
+import { signEvent, type MembershipEvent } from "./membership.ts";
 import { checkRelay } from "./relay-check.ts";
 import { rootEntry } from "./roots.ts";
 import { signRequest, type RequestSigner } from "./request-auth.ts";
@@ -350,14 +350,16 @@ export async function promises(deps: ClientDeps): Promise<{ readonly made: reado
   return { made: made.map(named), owed: owed.map(named) };
 }
 
-export type MembershipResult = { readonly ok: true; readonly admitted: boolean } | { readonly ok: false; readonly error: string };
+/** admitted: a member who can send. guest: hosted from another relay, so they can read what their hosts send. */
+export type MembershipResult = { readonly ok: true; readonly admitted: boolean; readonly guest: boolean } | { readonly ok: false; readonly error: string };
 
 /**
  * Asks my relay to record a vouch for, withdrawal of, or (admins only)
- * removal of someone, signed with my root key. error is the relay's bare
+ * removal of someone, or to host or stop hosting someone whose home is
+ * another relay, signed with my root key. error is the relay's bare
  * error code, or a short reason when the relay couldn't be used.
  */
-export async function membership(deps: ClientDeps, kind: "vouch" | "withdraw" | "remove", member: Contact): Promise<MembershipResult> {
+export async function membership(deps: ClientDeps, kind: MembershipEvent["kind"], member: Contact): Promise<MembershipResult> {
   const home = await readHome(deps.dir);
   const root = await deps.keys.load(home.me.pid);
   if (root === null) return { ok: false, error: "no_root_key" };
@@ -370,8 +372,8 @@ export async function membership(deps: ClientDeps, kind: "vouch" | "withdraw" | 
       headers: { "content-type": "application/json" },
       body: JSON.stringify(signEvent(event, root.signSec)),
     });
-    const body = (await res.json().catch(() => null)) as { admitted?: unknown; error?: unknown } | null;
-    if (res.status === 200 || res.status === 201) return { ok: true, admitted: body?.admitted === true };
+    const body = (await res.json().catch(() => null)) as { admitted?: unknown; guest?: unknown; error?: unknown } | null;
+    if (res.status === 200 || res.status === 201) return { ok: true, admitted: body?.admitted === true, guest: body?.guest === true };
     return { ok: false, error: typeof body?.error === "string" && ERROR_CODE.test(body.error) ? body.error : `status_${res.status}` };
   } catch (error) {
     return { ok: false, error: (error as Error).message };

@@ -466,3 +466,54 @@ test("a relay stops recording new members at its cap rather than growing without
   const res = await handle(event("vouch", alice), { store, roots: allRoots, now: () => NOW, join: { kind: "any-member" }, memberCap: 3 });
   assert.deepEqual([res.status, await json(res)], [409, { error: "relay_full" }]);
 });
+
+// ---- Guests: contacts whose home is another relay ----
+
+const guestEvent = (kind: "host" | "unhost", by: Identity, at: Date = NOW): Request =>
+  new Request(`${BASE}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(signEvent({ v: 1, kind, relay: HOST, member: rootEntry(newcomer), by: by.pid, ts: at.toISOString() }, by.signSec)),
+  });
+
+test("a hosted guest reads mail from their host, and only from their host; they can't send", async () => {
+  const store = memoryStore();
+  const send = open(store);
+  assert.equal((await send(put(alice, 0, envelope(alice, newcomer, 0, null)))).status, 400, "unknown recipient before hosting");
+  const hosted = await send(guestEvent("host", alice));
+  assert.deepEqual([hosted.status, await json(hosted)], [201, { member: newcomer.pid, admitted: false, guest: true }]);
+  assert.equal((await send(put(alice, 0, envelope(alice, newcomer, 0, null)))).status, 201);
+  assert.deepEqual(await json(await send(put(bob, 0, envelope(bob, newcomer, 0, null)))), { error: "unknown_recipient" }, "bob isn't their host");
+  assert.equal((await send(put(newcomer, 0, envelope(newcomer, alice, 0, null)))).status, 403, "a guest can't send");
+  const inbox = await send(signedGet(`/inbox/${newcomer.pid}`, newcomer));
+  assert.deepEqual(await json(inbox), { entries: [{ from: alice.pid, seq: 0 }] });
+  assert.equal((await send(signedGet(`/log/${alice.pid}/0`, newcomer, NOW, "n2"))).status, 200);
+});
+
+test("unhosting takes a guest's reads away", async () => {
+  const store = memoryStore();
+  await open(store)(guestEvent("host", alice));
+  const later = new Date(NOW.getTime() + 60_000);
+  const res = await handle(guestEvent("unhost", alice, later), { store, roots: allRoots, now: () => later, join: { kind: "any-member" }, admins: new Set() });
+  assert.deepEqual(await json(res), { member: newcomer.pid, admitted: false });
+  assert.equal((await open(store)(signedGet(`/inbox/${newcomer.pid}`, newcomer))).status, 401);
+});
+
+test("a guest whose only host is no longer a member can't read", async () => {
+  const store = memoryStore();
+  const host = generateIdentity();
+  const post = (kind: "vouch" | "withdraw" | "host", by: Identity, member: Identity, at: Date) =>
+    handle(
+      new Request(`${BASE}/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(signEvent({ v: 1, kind, relay: HOST, member: rootEntry(member), by: by.pid, ts: at.toISOString() }, by.signSec)),
+      }),
+      { store, roots: allRoots, now: () => at, join: { kind: "any-member" }, admins: new Set() },
+    );
+  assert.equal((await post("vouch", alice, host, NOW)).status, 201);
+  assert.equal((await post("host", host, newcomer, NOW)).status, 201);
+  assert.equal((await open(store)(signedGet(`/inbox/${newcomer.pid}`, newcomer))).status, 200);
+  assert.equal((await post("withdraw", alice, host, new Date(NOW.getTime() + 60_000))).status, 201);
+  assert.equal((await open(store)(signedGet(`/inbox/${newcomer.pid}`, newcomer, NOW, "n3"))).status, 401);
+});

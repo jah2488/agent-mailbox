@@ -1,5 +1,6 @@
 // Test support, not shipped behaviour: a small world of people sharing one
-// in-memory relay, each with a real home dir and file key store.
+// in-memory relay, each with a real home dir and file key store, plus Friend,
+// whose home is a second relay.
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,9 @@ import { handle } from "./relay.ts";
 import { contact, type Contact } from "./roster.ts";
 
 export const TEST_RELAY = "https://relay.test";
+/** Friend's home relay: its own store and key, Friend its only founder, any member may host. */
+export const OTHER_RELAY = "https://other.test";
+const OTHER_RELAY_KEY = relayKeyFromSeed("B".repeat(42) + "A");
 
 export type Person = { readonly id: Identity; readonly me: Contact; readonly deps: ClientDeps };
 
@@ -41,12 +45,15 @@ export async function world(options: WorldOptions = {}) {
   const store = memoryStore();
   const ids = { alice: generateIdentity(), bob: generateIdentity(), mallory: generateIdentity() };
   const roots = new Map(Object.values(ids).map((id) => [id.pid, toPeer(id)]));
+  const friendId = generateIdentity();
+  const other = { store: memoryStore(), roots: new Map([[friendId.pid, toPeer(friendId)]]), join: { kind: "any-member" } as const, identity: OTHER_RELAY_KEY };
   const relayFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (options.relayUp && !options.relayUp()) throw new TypeError("fetch failed");
     const req = new Request(input, init);
     const identity = options.relayKey === undefined ? TEST_RELAY_KEY : options.relayKey();
     const admins = new Set((options.admins ?? []).map((who) => ids[who].pid));
-    const deps = { store, roots, admins, now: () => new Date(), ...(identity === undefined ? {} : { identity }), ...(options.join === undefined ? {} : { join: options.join }) };
+    const home = { store, roots, admins, now: () => new Date(), ...(identity === undefined ? {} : { identity }), ...(options.join === undefined ? {} : { join: options.join }) };
+    const deps = new URL(req.url).origin === OTHER_RELAY ? { ...other, now: () => new Date() } : home;
     const answer = (async () => (await options.intercept?.(req.clone())) ?? handle(req, deps))();
     // Honour the abort signal the way real fetch does, so client timeouts are exercised.
     const signal = init?.signal;
@@ -54,11 +61,11 @@ export async function world(options: WorldOptions = {}) {
     return Promise.race([answer, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))]);
   }) as typeof fetch;
 
-  const person = async (id: Identity, name: string): Promise<Person> => {
+  const person = async (id: Identity, name: string, relay = TEST_RELAY): Promise<Person> => {
     const dir = await mkdtemp(join(tmpdir(), `mailbox-${name}-`));
     const keys = fileKeyStore(join(dir, "keys.json"));
     await keys.save(id);
-    const me = contact(toPeer(id), name, TEST_RELAY);
+    const me = contact(toPeer(id), name, relay);
     await initHome(dir, me);
     return { id, me, deps: { dir, keys, fetch: relayFetch, now: () => new Date() } };
   };
@@ -70,7 +77,8 @@ export async function world(options: WorldOptions = {}) {
   await addContact(mallory.deps.dir, bob.me);
   // On the same relay but not a founder: they can use it only once a member vouches for them.
   const stranger = await person(generateIdentity(), "Stranger");
-  return { alice, bob, mallory, stranger, store };
+  const friend = await person(friendId, "Friend", OTHER_RELAY);
+  return { alice, bob, mallory, stranger, friend, store };
 }
 
 /** The person's daemon: same home dir, its own key store holding only the certified agent key and their box keys. */

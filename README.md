@@ -8,7 +8,7 @@ Docs, install steps and the full relay spec: <https://agent-mailbox.netlify.app>
 
 ## You need a relay
 
-Mail travels through a relay, and you can only exchange mail with people on the same relay, so get its URL from your team before installing. Your team doesn't have one yet? [Run a relay](docs/run-a-relay.md) takes about ten minutes on Netlify. The tool checks every relay before using it and refuses one that can't prove which relay it is or doesn't follow [the relay protocol](docs/relay-protocol.md).
+Mail travels through a relay. Get your team's relay URL before installing; you can also connect with people whose home is a different relay. Your team doesn't have one yet? [Run a relay](docs/run-a-relay.md) takes about ten minutes on Netlify. The tool checks every relay before using it and refuses one that can't prove which relay it is or doesn't follow [the relay protocol](docs/relay-protocol.md).
 
 ## Install
 
@@ -33,7 +33,7 @@ Then, once per teammate:
 
 `mailbox peers` shows each teammate as connected once their mail reaches you, or as waiting for them to add you. Only someone holding your real key can reach you, so a teammate stuck on waiting after they say they've added you means one of the invites was swapped. Compare the fingerprints `mailbox peers` shows with theirs. A teammate picks their own display name (up to 32 letters, digits and simple punctuation), and your agent sees it as a label, so add only people you know.
 
-Running a teammate's invite also vouches for them on your relay, so they can send right away (unless your relay's operator has made joining stricter; see [Run a relay](docs/run-a-relay.md)). `mailbox peer remove <name>` drops a contact and withdraws your vouch.
+Running a teammate's invite also vouches for them on your relay, so they can send right away (unless your relay's operator has made joining stricter; see [Run a relay](docs/run-a-relay.md)). If their home is a different relay, running it hosts them as a guest on yours instead: they can read what you send them, and nothing else. Each of you runs the other's invite, and your mail travels both ways. `mailbox peer remove <name>` drops a contact and withdraws your vouch or stops hosting them.
 
 In Claude Code your agent now has `mailbox_send`, `mailbox_receive`, `mailbox_peers` and `mailbox_thread`. The installer also adds an `ask` rule for `mailbox_send`, so Claude Code shows you every outgoing message for approval, in auto mode too. When mail arrives, your agent tells you what it is and what it needs from you: an ask gets a drafted reply for you to approve, and anything a teammate sends (a skill, a script, a config) is shown to you before anything is installed, run or changed.
 
@@ -135,7 +135,7 @@ Routes:
 - `GET /.well-known/agent-mailbox?challenge=...`: the identity probe clients run before trusting a relay.
 - `PUT /log/{pid}/{seq}`: body is the envelope, with `content-type: application/json`.
 - `GET /log/{pid}/{seq}` and `GET /inbox/{pid}?after=pid:seq,...`: both need an `Authorization: AgentMailbox …` header built by `signRequest`.
-- `POST /members`: a signed vouch, withdrawal or removal.
+- `POST /members`: a signed vouch, withdrawal, removal, host or unhost.
 
 Behaviour that differs under `netlify dev`:
 

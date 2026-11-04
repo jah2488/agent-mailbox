@@ -565,3 +565,40 @@ test("removing a peer breaks the open promises you made them, saying why", async
   await run(["promises"], alices);
   assert.match(alices.lines.join("\n"), /Bob: prod keys \(broken\); reason: unpeered/);
 });
+
+// ---- Contacts on another relay ----
+
+test("adding a contact from another relay hosts them on yours, and mail flows both ways once each adds the other", async () => {
+  const { bob, friend } = await world({ join: { kind: "any-member" } });
+  const bobs = ioFor(bob);
+  assert.equal(await run(await inviteOf(friend), bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /Friend can now read what you send them on your relay/);
+  const friends = ioFor(friend);
+  assert.equal(await run(await inviteOf(bob), friends), 0, friends.errors.join("\n"));
+  assert.match(friends.lines.join("\n"), /Bob can now read what you send them on your relay/);
+
+  assert.equal((await send(bob.deps, { to: "Friend", tag: "ask", text: "lunch?" })).delivered, true);
+  assert.deepEqual((await receive(friend.deps, { tag: "ask" })).messages.map((m) => [m.fromName, m.body.prose]), [["Bob", "lunch?"]]);
+  assert.equal((await send(friend.deps, { to: "Bob", tag: "status", text: "yes" })).delivered, true);
+  assert.deepEqual((await receive(bob.deps, { tag: "status" })).messages.map((m) => [m.fromName, m.body.prose]), [["Friend", "yes"]]);
+});
+
+test("removing a contact from another relay unhosts them, so your relay stops taking mail for them", async () => {
+  const { bob, friend, store } = await world({ join: { kind: "any-member" } });
+  await run(await inviteOf(friend), ioFor(bob));
+  const bobs = ioFor(bob);
+  assert.equal(await run(["peer", "remove", "Friend"], bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /Friend can no longer read mail on your relay/);
+  const record = JSON.parse(new TextDecoder().decode((await store.get(`members/${friend.id.pid}`))!)) as { hosts: string[] };
+  assert.deepEqual(record.hosts, [], "the relay itself stopped hosting them");
+  await run(await inviteOf(friend), ioFor(bob));
+  assert.equal((await send(bob.deps, { to: "Friend", tag: "ask", text: "back?" })).delivered, true, "re-adding hosts them again");
+});
+
+test("a closed relay can't host a contact from another relay, and says so", async () => {
+  const { bob, friend } = await world();
+  const bobs = ioFor(bob);
+  assert.equal(await run(await inviteOf(friend), bobs), 0);
+  assert.match(bobs.lines.join("\n"), /operator adds people/);
+  assert.equal((await send(bob.deps, { to: "Alice", tag: "status", text: "ok" })).delivered, true, "no undeliverable hello jams the queue");
+});
