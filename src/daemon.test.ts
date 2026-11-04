@@ -177,3 +177,15 @@ test("a drafted answer whose send failed is resent next tick without asking the 
   assert.equal((await receive(alice.deps, { reply_to: asked.ref })).messages.length, 1);
   assert.deepEqual(daemon.audit.map((e) => e.kind), ["decision", "error", "decision", "reply_sent"]);
 });
+
+test("the daemon gives the policy the asker's relay, so a relay-scoped rule applies", async () => {
+  const { alice, bob } = await world();
+  const daemon = await daemonFor(bob);
+  const relayOnly = `@tier("allow")
+permit(principal in Group::"contacts", action == Action::"read", resource)
+when { resource.path like "status/*" && principal.relay == "relay.test" };`;
+  const deps: DaemonDeps = { ...daemon.deps, policy: async () => ({ ok: true, cedar: relayOnly, version: 7, responder: DEFAULT_RESPONDER, hash: "b2:policy" }) };
+  await send(alice.deps, { to: "Bob", tag: "ask", text: "status?" });
+  await tick(deps, fresh);
+  assert.equal((daemon.audit[0]!.data as { outcome: string }).outcome, "ask-model");
+});

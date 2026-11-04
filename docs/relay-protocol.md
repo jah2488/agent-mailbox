@@ -35,6 +35,40 @@ Both reads need `Authorization: AgentMailbox <base64url claim>`, a signature by 
 
 An unsigned read is `401`.
 
+## Membership
+
+A relay's members are its founders (`MAILBOX_ROOTS`) plus everyone admitted by vouch. Entries in `MAILBOX_ROOTS` with `"admin": true` are admins.
+
+`POST /members` (`content-type: application/json`) takes a membership event signed by its actor's root:
+
+```json
+{ "e": { "v": 1, "kind": "vouch | withdraw | remove", "relay": "<this relay's host>", "member": { "pid", "sign_pub", "box_pub" }, "by": "<actor pid>", "ts": "<ISO time>" }, "s": "<signature>" }
+```
+
+`s` signs `agent-mailbox/v1/membership\n` followed by the canonical JSON of `e`. The relay refuses an event unless:
+- the actor is a current member and the signature verifies against their key;
+- `relay` is this relay's host;
+- `ts` is within 5 minutes of the relay's clock.
+
+`MAILBOX_JOIN` sets who may vouch:
+
+| `MAILBOX_JOIN` | Who may vouch | Admitted after |
+|---|---|---|
+| `any-member` (default) | any member | one vouch |
+| `admins` | admins only | one admin vouch |
+| `vouches:N` | any member | N different members |
+| `closed` | nobody | only founders are members |
+
+The rule set covers removal too:
+- **Withdraw:** a member may withdraw their own vouch.
+- **Remove:** an admin may remove anyone admitted by vouch.
+- **Replay:** events are stored write-once and replayed in time order, so a later vouch can re-admit someone. Someone a removed member vouched for stays admitted until they're removed too.
+- **No-op vouch:** a vouch for someone who's already a member is answered `200 {"admitted": true}` and stores nothing.
+
+Responses:
+- **Recorded:** `201 {"member": "<pid>", "admitted": true | false}`.
+- **Refused:** `403 {"error": "not_a_member" | "admins_only" | "join_closed"}`, `401 bad_signature`, or `400 wrong_relay | stale | malformed | bad_member`.
+
 ## What clients enforce
 
 `mailbox setup` and `mailbox peer add` check a relay before using it. Sync and send check again at most once a day. A relay is refused when it:

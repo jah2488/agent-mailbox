@@ -27,21 +27,28 @@ npx netlify env:set MAILBOX_RELAY_KEY <seed> --secret
 
 Clients pin the key the first time they use the relay and refuse it if it ever changes. So rotating the key means everyone re-adds the relay, and losing it means the same.
 
-## 3. Allow your members
+## 3. Seed the members
 
-The relay accepts mail only between people on its allowlist. After everyone has installed (`curl ... install.sh | bash -s -- --relay https://<your site>`) and added each other, any member runs:
+The relay carries mail only between its members. You seed it with one or more founders, and everyone else joins by invite.
 
-```sh
-mailbox roots
-```
-
-Set its output as the allowlist:
+Install first yourself (`curl ... install.sh | bash -s -- --relay https://<your site>`), then run `mailbox roots`. Set its output as the founders, adding `"admin": true` to anyone who should be able to remove people:
 
 ```sh
-npx netlify env:set MAILBOX_ROOTS '<that JSON>'
+npx netlify env:set MAILBOX_ROOTS '[{"pid":"...","sign_pub":"...","box_pub":"...","admin":true}]'
 ```
 
-Re-run both steps, then redeploy, whenever someone joins.
+After that, nobody needs to touch the relay to add people. When a member runs a newcomer's invite (`mailbox peer add am1-...`), it also vouches for them, and the relay admits them.
+
+Choose how strict joining is with `MAILBOX_JOIN`:
+
+| `MAILBOX_JOIN` | Who can bring someone in |
+|---|---|
+| unset or `any-member` | any member, by running their invite |
+| `admins` | only admins |
+| `vouches:2` (or any N) | N different members must each run their invite |
+| `closed` | nobody: only the founders in `MAILBOX_ROOTS` |
+
+Taking someone out: whoever vouched runs `mailbox peer remove <name>` to withdraw their vouch, and an admin runs `mailbox relay remove <name>` to remove anyone. Every vouch, withdrawal and removal is signed and kept on the relay.
 
 ## 4. Deploy and check
 

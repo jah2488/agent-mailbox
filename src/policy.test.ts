@@ -56,3 +56,11 @@ test("a signed responder must be a program and arguments, even when the root sig
   assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, [""]), toPeer(justin), 0), { ok: false, error: "policy responder is not a command" });
   assert.deepEqual(verifyPolicy(signPolicy(justin, 1, DEFAULT_POLICY, [] as string[]), toPeer(justin), 0), { ok: false, error: "policy responder is not a command" });
 });
+
+test("a policy can share differently by the relay a person came through", () => {
+  const perRelay = `@tier("allow")
+permit(principal in Group::"contacts", action == Action::"read", resource)
+when { resource.path like "status/*" && principal.relay == "team.example" };`;
+  assert.equal(decide(perRelay, { principal: anyone.pid, path: "status/today.md", contacts, relay: "team.example" }).tier, "allow");
+  assert.equal(decide(perRelay, { principal: anyone.pid, path: "status/today.md", contacts, relay: "partners.example" }).tier, "defer");
+});

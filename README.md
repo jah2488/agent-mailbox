@@ -31,7 +31,7 @@ Then, once per teammate:
 
 `mailbox peers` shows each teammate as connected once their mail reaches you, or as waiting for them to add you. Only someone holding your real key can reach you, so a teammate stuck on waiting after they say they've added you means one of the invites was swapped. Compare the fingerprints `mailbox peers` shows with theirs. A teammate picks their own display name (up to 32 letters, digits and simple punctuation), and your agent sees it as a label, so add only people you know.
 
-Whoever runs the relay adds everyone's key to its allowlist with `mailbox roots`.
+Running a teammate's invite also vouches for them on your relay, so they can send right away (unless your relay's operator has made joining stricter; see [Run a relay](docs/run-a-relay.md)). `mailbox peer remove <name>` drops a contact and withdraws your vouch.
 
 In Claude Code your agent now has `mailbox_send`, `mailbox_receive`, `mailbox_peers` and `mailbox_thread`. The installer also adds an `ask` rule for `mailbox_send`, so Claude Code shows you every outgoing message for approval, in auto mode too. When mail arrives, your agent tells you what it is and what it needs from you: an ask gets a drafted reply for you to approve, and anything a teammate sends (a skill, a script, a config) is shown to you before anything is installed, run or changed.
 

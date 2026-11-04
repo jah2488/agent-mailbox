@@ -63,7 +63,13 @@ export const policyParses = (text: string): boolean => parse(text) !== null;
 
 export function decide(
   text: string,
-  request: { readonly principal: Pid; readonly path: string; readonly contacts: ReadonlySet<Pid> },
+  request: {
+    readonly principal: Pid;
+    readonly path: string;
+    readonly contacts: ReadonlySet<Pid>;
+    /** The host of the relay the asker came through, as principal.relay: per-relay rules are policy, not prompt. */
+    readonly relay?: string;
+  },
 ): { readonly tier: Tier; readonly policies: readonly string[] } {
   const parsed = parse(text);
   if (parsed === null) return { tier: "deny", policies: [] };
@@ -75,7 +81,7 @@ export function decide(
     context: {},
     policies: { staticPolicies: parsed.policies },
     entities: [
-      { uid: { type: "Person", id: request.principal }, attrs: {}, parents: inContacts ? [{ type: "Group", id: "contacts" }] : [] },
+      { uid: { type: "Person", id: request.principal }, attrs: { relay: request.relay ?? "" }, parents: inContacts ? [{ type: "Group", id: "contacts" }] : [] },
       { uid: { type: "Group", id: "contacts" }, attrs: {}, parents: [] },
       { uid: { type: "File", id: request.path }, attrs: { path: request.path }, parents: [] },
     ],

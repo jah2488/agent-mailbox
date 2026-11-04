@@ -67,7 +67,10 @@ export type EventContext = {
 };
 
 /** Whether the relay should record this event, checked before anything is stored. */
-export function checkEvent(value: unknown, ctx: EventContext): { readonly ok: true; readonly event: MembershipEvent } | { readonly ok: false; readonly status: number; readonly error: string } {
+export function checkEvent(
+  value: unknown,
+  ctx: EventContext,
+): { readonly ok: true; readonly event: MembershipEvent; readonly alreadyMember?: true } | { readonly ok: false; readonly status: number; readonly error: string } {
   const signed = value as Partial<SignedEvent> | null;
   const e = signed?.e as Partial<MembershipEvent> | undefined;
   if (typeof signed?.s !== "string" || e === undefined || e.v !== 1 || !KINDS.has(e.kind as string) || ![e.relay, e.by, e.ts].every((f) => typeof f === "string")) {
@@ -86,6 +89,8 @@ export function checkEvent(value: unknown, ctx: EventContext): { readonly ok: tr
   }
   if (event.relay !== ctx.host) return { ok: false, status: 400, error: "wrong_relay" };
   if (!(Math.abs(Date.parse(event.ts) - ctx.now.getTime()) <= MAX_SKEW_MS)) return { ok: false, status: 400, error: "stale" };
+  // Adding someone who's already in, a founder say, changes nothing and needs no join rule.
+  if (event.kind === "vouch" && ctx.members.has(event.member.pid as Pid)) return { ok: true, event, alreadyMember: true };
   const isAdmin = ctx.admins.has(actor.pid);
   if (event.kind === "vouch" && ctx.rule.kind === "closed") return { ok: false, status: 403, error: "join_closed" };
   if (event.kind === "vouch" && ctx.rule.kind === "admins" && !isAdmin) return { ok: false, status: 403, error: "admins_only" };

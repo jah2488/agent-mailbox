@@ -147,3 +147,9 @@ export async function withLock<T>(dir: string, fn: () => Promise<T>, timing: Loc
     await unlink(lock).catch(() => undefined);
   }
 }
+
+/** Drops one contact from the roster. Their mail already received stays in state. */
+export async function removeContact(dir: string, pid: Pid): Promise<void> {
+  const peers = (await readPeers(dir)).filter((e) => (e as { pid?: string }).pid !== pid);
+  await writeJson(file(dir, "roster.json"), peers);
+}

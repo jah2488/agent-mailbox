@@ -31,7 +31,7 @@ const ask = (over: Partial<Inbound> = {}, body: Partial<Inbound["body"]> = {}): 
   body: { tag: "ask", ref: "q1", payload: null, prose: "what are you on?", ...body },
 });
 
-const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada", responder: DEFAULT_RESPONDER };
+const ctx = { policy: DEFAULT_POLICY, contacts, files, owner: "Justin", askerName: "Ada", responder: DEFAULT_RESPONDER, askerRelay: "relay.example" };
 
 test("an ask is answered only from files policy allows, and flagged if any of them is flag-tier", () => {
   const plan = planAnswer(ask(), ctx);

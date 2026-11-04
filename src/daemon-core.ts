@@ -20,12 +20,14 @@ export type PlanContext = {
   readonly askerName: string;
   /** The responder the signed policy names, carried into the plan so the model that runs is the one that was signed for. */
   readonly responder: ResponderConfig;
+  /** The host of the relay the asker uses, for policies that differ by relay. */
+  readonly askerRelay: string;
 };
 
 export function planAnswer(ask: Inbound, ctx: PlanContext): Plan {
   // Asks from people only. Never replies, never another agent's mail, never anything forwarded.
   if (ask.body.tag !== "ask" || ask.via.kind === "agent" || ask.hops > 0) return { kind: "ignore" };
-  const decided = ctx.files.map((file) => ({ file, tier: decide(ctx.policy, { principal: ask.from, path: file.path, contacts: ctx.contacts }).tier }));
+  const decided = ctx.files.map((file) => ({ file, tier: decide(ctx.policy, { principal: ask.from, path: file.path, contacts: ctx.contacts, relay: ctx.askerRelay }).tier }));
   const usable = decided.filter((d) => d.tier === "allow" || d.tier === "flag");
   if (usable.length === 0) return { kind: "defer", reason: "nothing you share covers this asker" };
   const files = usable.map((d) => d.file).sort((a, b) => (a.path < b.path ? -1 : 1));

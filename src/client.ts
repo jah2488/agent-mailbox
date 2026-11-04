@@ -22,7 +22,9 @@ import {
   type Pattern,
 } from "./mailbox.ts";
 import { ledger, type Commitment } from "./promises.ts";
+import { signEvent } from "./membership.ts";
 import { checkRelay } from "./relay-check.ts";
+import { rootEntry } from "./roots.ts";
 import { signRequest, type RequestSigner } from "./request-auth.ts";
 import type { Contact } from "./roster.ts";
 import sodium from "./sodium.ts";
@@ -340,4 +342,32 @@ export async function promises(deps: ClientDeps): Promise<{ readonly made: reado
   const named = (c: Commitment) => ({ ...c, name: home.contacts.get(c.counterparty)?.name ?? c.counterparty });
   const { made, owed } = ledger(home.state, home.me.pid, deps.now());
   return { made: made.map(named), owed: owed.map(named) };
+}
+
+export type MembershipResult = { readonly ok: true; readonly admitted: boolean } | { readonly ok: false; readonly error: string };
+
+/**
+ * Asks my relay to record a vouch for, withdrawal of, or (admins only)
+ * removal of someone, signed with my root key. error is the relay's bare
+ * error code, or a short reason when the relay couldn't be used.
+ */
+export async function membership(deps: ClientDeps, kind: "vouch" | "withdraw" | "remove", member: Contact): Promise<MembershipResult> {
+  const home = await readHome(deps.dir);
+  const root = await deps.keys.load(home.me.pid);
+  if (root === null) return { ok: false, error: "no_root_key" };
+  const relay = await checkRelay(deps, home.me.relay);
+  if (!relay.ok) return { ok: false, error: relay.error };
+  const event = { v: 1 as const, kind, relay: new URL(home.me.relay).host, member: rootEntry(member), by: home.me.pid, ts: deps.now().toISOString() };
+  try {
+    const res = await relayFetch(deps, `${home.me.relay}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(signEvent(event, root.signSec)),
+    });
+    const body = (await res.json().catch(() => null)) as { admitted?: unknown; error?: unknown } | null;
+    if (res.status === 200 || res.status === 201) return { ok: true, admitted: body?.admitted === true };
+    return { ok: false, error: typeof body?.error === "string" && ERROR_CODE.test(body.error) ? body.error : `status_${res.status}` };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
 }

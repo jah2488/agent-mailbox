@@ -7,13 +7,13 @@ import { isDevCheckout } from "./config.ts";
 import { auditVerify, daemonCommand, daemonInstalled, daemonStop, policyCommand, review } from "./cli-daemon.ts";
 import { readCert, shareDir } from "./daemon-files.ts";
 import { checkRelay, readPins } from "./relay-check.ts";
-import { promises, send, sync, type ClientDeps, type NamedCommitment } from "./client.ts";
+import { membership, promises, send, sync, type ClientDeps, type MembershipResult, type NamedCommitment } from "./client.ts";
 import { ledger } from "./promises.ts";
 import { heardFrom } from "./mailbox.ts";
-import { addContact, initHome, readHome, type Home } from "./home.ts";
+import { addContact, initHome, readHome, removeContact, type Home } from "./home.ts";
 import { fingerprintOf, generateIdentity, toPeer } from "./identity.ts";
 import type { KeyStore } from "./keystore.ts";
-import { contact, inviteToken, normaliseName, normaliseRelay, readInvite, rosterEntry } from "./roster.ts";
+import { contact, inviteToken, normaliseName, normaliseRelay, readInvite, rosterEntry, type Contact } from "./roster.ts";
 
 export type CliIo = {
   readonly deps: ClientDeps;
@@ -50,7 +50,9 @@ const USAGE = [
   "  status                               who you are, what to share, and what's running",
   "  whoami                               your name, relay and fingerprint",
   "  invite [--print]                     copy the command a teammate runs to add you",
-  "  peer add <invite>                    add a teammate from their invite",
+  "  peer add <invite>                    add a teammate from their invite (and vouch for them on your relay)",
+  "  peer remove <name>                   drop a contact and withdraw your vouch for them",
+  "  relay remove <name>                  admins: remove someone from your relay",
   "  peers                                list contacts with fingerprints",
   "  sync                                 fetch new mail now",
   "  promises                             what you've promised teammates, and what they've promised you",
@@ -243,13 +245,72 @@ async function peerAdd(args: readonly string[], io: CliIo): Promise<number> {
   const s = styles(io.color);
   io.out(`${s.accent("Added")} ${s.bold(them.name)} on ${new URL(them.relay).host}.`);
   io.out(s.dim(`Their fingerprint is ${fingerprintOf(them.signPub)}.`));
-  // The hello is how they see you're connected. Only someone holding your real key can answer it.
+  const me = (await readHome(io.deps.dir)).me;
+  // On my own relay, adding someone is also my vouch for them there.
+  const vouch = them.relay === me.relay ? await membership(io.deps, "vouch", them) : null;
+  if (vouch !== null) io.out(vouchMessage(them.name, vouch));
+  // Only say hello once the relay will deliver it: a refused message would hold up everything queued behind it.
+  if (vouch !== null && !(vouch.ok && vouch.admitted)) return 0;
   const hello = await send(io.deps, { to: them.pid, tag: "hello", text: `I added you on agent-mailbox.` }).catch((error: Error) => ({ delivered: false, error: error.message }));
   io.out(
     hello.delivered
       ? `Told ${them.name} you added them. Once they add you too, ${s.cmd("mailbox peers")} shows you as connected.`
       : `${them.name} will hear you added them once the relay accepts your messages.`,
   );
+  return 0;
+}
+
+function vouchMessage(name: string, result: MembershipResult): string {
+  if (result.ok) return result.admitted ? `Vouched for ${name} on your relay; they can send now.` : `Vouched for ${name}. Your relay needs more vouches before they can send.`;
+  if (result.error === "admins_only") return `Your relay only lets admins add people. Ask an admin to run ${name}'s invite.`;
+  if (result.error === "join_closed") return `Your relay's operator adds people. Send them ${name}'s invite.`;
+  return `Couldn't vouch for ${name} on your relay (${result.error}).`;
+}
+
+/** A contact other than me, by name, ignoring case. */
+function contactNamed(home: Home, name: string | undefined): Contact | null {
+  const wanted = name?.trim().toLowerCase();
+  return [...home.contacts.values()].find((c) => c.pid !== home.me.pid && c.name.toLowerCase() === wanted) ?? null;
+}
+
+/** Drops a contact and withdraws my vouch for them on my relay. */
+async function peerRemove(args: readonly string[], io: CliIo): Promise<number> {
+  const home = await homeOrExplain(io);
+  if (home === null) return 1;
+  const them = contactNamed(home, args[0]);
+  if (them === null) {
+    io.err(args[0] === undefined ? "usage: mailbox peer remove <name>" : `no contact named ${args[0]}`);
+    return args[0] === undefined ? 2 : 1;
+  }
+  await removeContact(io.deps.dir, them.pid);
+  io.out(`Removed ${them.name} from your contacts.`);
+  if (them.relay !== home.me.relay) return 0;
+  const withdrawn = await membership(io.deps, "withdraw", them);
+  io.out(
+    !withdrawn.ok
+      ? `Couldn't withdraw your vouch on your relay (${withdrawn.error}).`
+      : withdrawn.admitted
+        ? `Withdrew your vouch; ${them.name} is still on your relay through other members' vouches.`
+        : `Withdrew your vouch; ${them.name} can no longer use your relay.`,
+  );
+  return 0;
+}
+
+/** An admin removing someone from the relay outright, whoever vouched for them. */
+async function relayRemove(args: readonly string[], io: CliIo): Promise<number> {
+  const home = await homeOrExplain(io);
+  if (home === null) return 1;
+  const them = contactNamed(home, args[0]);
+  if (them === null) {
+    io.err(args[0] === undefined ? "usage: mailbox relay remove <name>" : `no contact named ${args[0]}`);
+    return args[0] === undefined ? 2 : 1;
+  }
+  const removed = await membership(io.deps, "remove", them);
+  if (!removed.ok) {
+    io.err(removed.error === "admins_only" ? "only an admin of your relay can remove people from it." : `Couldn't remove ${them.name} (${removed.error}).`);
+    return 1;
+  }
+  io.out(`Removed ${them.name} from your relay. Members can vouch for them again later.`);
   return 0;
 }
 
@@ -464,6 +525,7 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return invite(rest, io);
     case "peer":
       if (rest[0] === "add") return peerAdd(rest.slice(1), io);
+      if (rest[0] === "remove") return peerRemove(rest.slice(1), io);
       break;
     case "peers":
       return peers(io);
@@ -487,6 +549,9 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return promisesCommand(io);
     case "hook":
       return hookCommand(rest[0], io);
+    case "relay":
+      if (rest[0] === "remove") return relayRemove(rest.slice(1), io);
+      break;
     case "uninstall":
       return uninstall(io);
     case "audit":

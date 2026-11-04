@@ -10,6 +10,7 @@ import { agentIdentity, generateIdentity, toPeer, type Identity } from "./identi
 import { fileKeyStore } from "./keystore.ts";
 import { memoryStore } from "./memory-store.ts";
 import { relayKeyFromSeed, type RelayKey } from "./relay-identity.ts";
+import type { JoinRule } from "./membership.ts";
 import { handle } from "./relay.ts";
 import { contact, type Contact } from "./roster.ts";
 
@@ -27,6 +28,10 @@ export type WorldOptions = {
   readonly intercept?: (req: Request) => Response | undefined | Promise<Response | undefined>;
   /** The relay's key on each request; undefined is a relay with no key. Default: TEST_RELAY_KEY throughout. */
   readonly relayKey?: () => RelayKey | undefined;
+  /** The relay's join rule. Default: none, so only the founders (Alice, Bob, Mallory) may use it. */
+  readonly join?: JoinRule;
+  /** Founders who are the relay's admins. */
+  readonly admins?: readonly ("alice" | "bob" | "mallory")[];
 };
 
 /** The test relay's key. A fixed seed, so separate test homes see the same relay. */
@@ -40,7 +45,8 @@ export async function world(options: WorldOptions = {}) {
     if (options.relayUp && !options.relayUp()) throw new TypeError("fetch failed");
     const req = new Request(input, init);
     const identity = options.relayKey === undefined ? TEST_RELAY_KEY : options.relayKey();
-    const deps = { store, roots, now: () => new Date(), ...(identity === undefined ? {} : { identity }) };
+    const admins = new Set((options.admins ?? []).map((who) => ids[who].pid));
+    const deps = { store, roots, admins, now: () => new Date(), ...(identity === undefined ? {} : { identity }), ...(options.join === undefined ? {} : { join: options.join }) };
     const answer = (async () => (await options.intercept?.(req.clone())) ?? handle(req, deps))();
     // Honour the abort signal the way real fetch does, so client timeouts are exercised.
     const signal = init?.signal;
@@ -62,7 +68,9 @@ export async function world(options: WorldOptions = {}) {
   await addContact(alice.deps.dir, bob.me);
   await addContact(bob.deps.dir, alice.me);
   await addContact(mallory.deps.dir, bob.me);
-  return { alice, bob, mallory, store };
+  // On the same relay but not a founder: they can use it only once a member vouches for them.
+  const stranger = await person(generateIdentity(), "Stranger");
+  return { alice, bob, mallory, stranger, store };
 }
 
 /** The person's daemon: same home dir, its own key store holding only the certified agent key and their box keys. */

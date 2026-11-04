@@ -428,3 +428,56 @@ test("mailbox promises and the status panel show promises on both sides", async 
   await run(["promises"], alices);
   assert.match(alices.lines.join("\n"), /Promised to you[\s\S]*Bob: prod keys/);
 });
+
+// ---- Joining a relay by vouch ----
+
+test("running a newcomer's invite vouches for them on your relay, after which they can send", async () => {
+  const { bob, stranger } = await world({ join: { kind: "any-member" } });
+  await run(await inviteOf(bob), ioFor(stranger));
+  const before = await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" });
+  assert.equal(before.delivered, false, "not a member yet");
+
+  const bobs = ioFor(bob);
+  assert.equal(await run(await inviteOf(stranger), bobs), 0, bobs.errors.join("\n"));
+  assert.match(bobs.lines.join("\n"), /Vouched for Stranger on your relay/);
+  const delivered = await send(stranger.deps, { to: "Bob", tag: "ask", text: "now?" });
+  assert.equal(delivered.delivered, true);
+});
+
+test("a relay that only lets admins vouch says so, and the newcomer stays out", async () => {
+  const { alice, bob, stranger } = await world({ join: { kind: "admins" }, admins: ["alice"] });
+  await run(await inviteOf(bob), ioFor(stranger));
+  const bobs = ioFor(bob);
+  await run(await inviteOf(stranger), bobs);
+  assert.match(bobs.lines.join("\n") + bobs.errors.join("\n"), /only lets admins add people/);
+  assert.equal((await send(bob.deps, { to: "Alice", tag: "status", text: "still working" })).delivered, true, "no undeliverable hello is left jamming Bob's queue");
+  assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" })).delivered, false);
+
+  await run(await inviteOf(stranger), ioFor(alice));
+  assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" })).delivered, true, "an admin's vouch admits them");
+});
+
+test("peer remove drops the contact and withdraws your vouch, so they can no longer send", async () => {
+  const { bob, stranger } = await world({ join: { kind: "any-member" } });
+  await run(await inviteOf(bob), ioFor(stranger));
+  await run(await inviteOf(stranger), ioFor(bob));
+  assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" })).delivered, true);
+
+  const bobs = ioFor(bob);
+  assert.equal(await run(["peer", "remove", "Stranger"], bobs), 0, bobs.errors.join("\n"));
+  assert.ok(![...(await readHome(bob.deps.dir)).contacts.values()].some((c) => c.name === "Stranger"));
+  assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "still there?" })).delivered, false);
+});
+
+test("relay remove is for admins: anyone else is told so", async () => {
+  const { alice, bob, stranger } = await world({ join: { kind: "any-member" }, admins: ["alice"] });
+  await run(await inviteOf(bob), ioFor(stranger));
+  await run(await inviteOf(stranger), ioFor(bob));
+  await run(await inviteOf(stranger), ioFor(alice));
+
+  const bobs = ioFor(bob);
+  assert.equal(await run(["relay", "remove", "Stranger"], bobs), 1);
+  assert.match(bobs.errors.join("\n"), /only an admin/);
+  assert.equal(await run(["relay", "remove", "Stranger"], ioFor(alice)), 0);
+  assert.equal((await send(stranger.deps, { to: "Bob", tag: "ask", text: "hi" })).delivered, false);
+});

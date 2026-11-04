@@ -64,3 +64,9 @@ test("the relay's join rule and roles decide who may vouch, withdraw and remove"
   assert.equal(checkEvent(signEvent(remove(admin, at(0)), admin.signSec), ctx()).ok, true);
   assert.equal(checkEvent(signEvent(withdraw(founder, at(0)), founder.signSec), ctx()).ok, true);
 });
+
+test("vouching for someone who's already a member is a verified no-op, whatever the join rule", () => {
+  const already = { ...ctx({ kind: "closed" }), members: new Map([...ctx().members, [newcomer.pid, newcomer]]) };
+  assert.deepEqual(checkEvent(signEvent(vouch(founder), founder.signSec), already), { ok: true, event: vouch(founder), alreadyMember: true });
+  assert.deepEqual(checkEvent(signEvent(vouch(founder), other.signSec), already), { ok: false, status: 401, error: "bad_signature" });
+});

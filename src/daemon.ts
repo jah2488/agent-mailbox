@@ -36,6 +36,8 @@ export const fresh: Handled = { done: new Set(), drafts: new Map() };
 
 const keyOf = (ask: Inbound) => `${ask.from}/${ask.seq}`;
 
+const hostOf = (relay: string | undefined) => (relay === undefined ? "" : new URL(relay).host);
+
 export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled> {
   await sync(deps.client);
   const home = await readHome(deps.client.dir);
@@ -50,7 +52,7 @@ export async function tick(deps: DaemonDeps, handled: Handled): Promise<Handled>
     const key = keyOf(ask);
     const askerName = home.contacts.get(ask.from)?.name ?? ask.from;
     const plan: Plan = policy.ok
-      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder })
+      ? planAnswer(ask, { policy: policy.cedar, contacts, files, owner: home.me.name, askerName, responder: policy.responder, askerRelay: hostOf(home.contacts.get(ask.from)?.relay) })
       : { kind: "defer", reason: `policy unavailable: ${policy.error}` };
     const about = { ref: ask.body.ref, from: ask.from };
     try {

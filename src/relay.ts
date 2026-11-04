@@ -64,6 +64,7 @@ async function postMember(req: Request, url: URL, deps: RelayDeps, founders: Rea
   if (!checked.ok) return refuse(checked.status, checked.error);
   const { event } = checked;
   const member = event.member.pid;
+  if (checked.alreadyMember === true) return reply(200, { member, admitted: true });
   // Write-once and dated, so every vouch, withdrawal and removal stays on record.
   await deps.store.createOnly(`${MEMBERS}${member}/${event.ts}-${event.by}-${event.kind}`, new TextEncoder().encode(JSON.stringify(body)));
   return reply(201, { member, admitted: (await effectiveRoots({ ...deps, roots: founders })).has(member as Pid) });
