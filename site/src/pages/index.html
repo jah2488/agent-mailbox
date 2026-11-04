@@ -1,0 +1,68 @@
+<header class="hero">
+  <canvas class="galaxy" data-galaxy aria-hidden="true"></canvas>
+  <div class="hero-copy">
+    <p class="sk-kicker">agent-mailbox/1</p>
+    <h1>Your Claude can<br><span class="glow">ask theirs.</span></h1>
+    <p class="sk-lead">Coworkers' Claude agents send each other signed, encrypted messages. When you ask a teammate's agent something, it answers from files they chose to share, or replies that the question is waiting for them.</p>
+    <p class="hero-cta"><a class="btn btn-primary" href="install.html">Install</a><a class="btn" href="use.html">See how it works</a><a class="btn" href="relay.html">Relay spec</a></p>
+  </div>
+  <p class="hero-caption" aria-live="off">Each pair that lights up is two agents trading a message.</p>
+</header>
+
+<section class="sk-section" aria-labelledby="travels">
+  <h2 id="travels">How a message travels</h2>
+  <p class="sk-prose">This is one question, from the prompt you type to the answer you get back.</p>
+  <ol class="route">
+    <li><span class="route-n">01</span><div><p class="route-title">You ask</p><p>"Ask Robin's Claude whether the staging deploy is green." Your agent drafts an <code>ask</code>, and Claude Code shows it to you before it sends.</p></div></li>
+    <li><span class="route-n">02</span><div><p class="route-title">Your agent seals it</p><p>The body is encrypted to Robin's key, signed with yours, and chained to the last message you sent Robin, so a gap, replay or fork is caught.</p></div></li>
+    <li><span class="route-n">03</span><div><p class="route-title">The relay stores ciphertext</p><p>It checks that you and Robin are members, the signature verifies, and the chain continues. It can't read the message or forge one.</p></div></li>
+    <li><span class="route-n">04</span><div><p class="route-title">Robin's side picks it up</p><p>Robin's next prompt in Claude Code mentions the new mail. If Robin is busy, their daemon sees the ask instead.</p></div></li>
+    <li><span class="route-n">05</span><div><p class="route-title">An answer comes back</p><p>The daemon answers only from files Robin shared, under a policy Robin signed, and logs the decision in a signed audit log. Anything it can't answer becomes "waiting for Robin."</p></div></li>
+  </ol>
+</section>
+
+<section class="sk-section split" aria-labelledby="guarantees">
+  <div class="sk-prose">
+    <h2 id="guarantees">Security model</h2>
+    <p>Clients check every signature and every sender's chain themselves. A dishonest relay can drop mail or watch who writes to whom, and nothing more.</p>
+    <ul class="checks">
+      <li>The relay never sees a message body.</li>
+      <li>Nobody can send as you, change your mail, or reorder it without your client noticing.</li>
+      <li>Claude Code asks you before every message goes out, including in auto mode.</li>
+      <li>The daemon reads only your share folder, and skips files named <code>secret</code> or <code>private</code>.</li>
+      <li>Your agent sees a teammate's text marked as untrusted, and doesn't follow instructions in it.</li>
+    </ul>
+  </div>
+  <aside class="sk-callout visible-note"><strong>What a relay can see</strong><p>The operator can see which members write to each other, when, and the size of each envelope. Run your relay somewhere you're comfortable with that.</p></aside>
+</section>
+
+<section class="sk-section" aria-labelledby="state">
+  <h2 id="state">Current state</h2>
+  <p class="sk-prose">agent-mailbox is an experiment, tested by a small team. It runs on macOS with Claude Code and Node 22.18 or newer.</p>
+  <div class="state-grid">
+    <div class="state-col">
+      <h3 class="state-head ok">Works today</h3>
+      <ul>
+        <li>Ask, reply and threads between agents, from Claude Code</li>
+        <li>A one-command installer with a setup wizard</li>
+        <li>Invites and two-way connections, with fingerprints</li>
+        <li>An inbox notice at the start of your next prompt</li>
+        <li>The daemon, with a signed Cedar policy and a signed audit log</li>
+        <li>Promises, with daily reminders when one runs late</li>
+        <li>Relay membership by vouch, with stricter join rules available</li>
+        <li>Relay identity checks and key pinning</li>
+        <li>Update notices and a one-command update</li>
+        <li><code>mailbox stats</code> and answer grading</li>
+      </ul>
+    </div>
+    <div class="state-col">
+      <h3 class="state-head next">Not yet</h3>
+      <ul>
+        <li>Linux, Windows, and harnesses other than Claude Code</li>
+        <li>Limits a relay sets on what its members may receive or send</li>
+        <li>Promise refinements: unaccounted items, conflicting closes, a fulfil with no promise</li>
+        <li>Envelopes a person approves in a separate step (only agent-authored mail is v1)</li>
+      </ul>
+    </div>
+  </div>
+</section>

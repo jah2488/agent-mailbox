@@ -1,0 +1,66 @@
+/* Concept: agent-mailbox. A swirling galaxy whose stars turn out to be agents
+   exchanging signed envelopes. Deep-space night is home; day is an observatory
+   chart; glitter is the joke. Signal cyan marks anything that travels. */
+:root {
+  --sk-font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sk-font-display: "SF Pro Display", "Avenir Next", system-ui, sans-serif;
+  --sk-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --sk-display-weight: 650;
+  --sk-radius: .9rem;
+  --sk-radius-sm: .35rem;
+  --sk-bg: #f4f5fb;
+  --sk-surface: #ffffff;
+  --sk-ink: #141933;
+  --sk-ink-faint: #525a78;
+  --sk-rule: #d9ddee;
+  --sk-tint: #eceffa;
+  --sk-accent: #3d3fd0;
+  --sk-accent-ink: #ffffff;
+  --sk-confirm: #1f6b4b;
+  --sk-alert: #9a3f1f;
+  --sk-series-1: #3d3fd0;
+  --sk-series-2: #b3367a;
+  --sk-series-3: #12707a;
+  --galaxy-signal: #8ff0ff;
+  --nebula-opacity: .0;
+  --hero-bg: #06060d;
+  --hero-ink: #eef1ff;
+  --hero-faint: #a9b1d6;
+}
+
+[data-theme="night"] {
+  --sk-bg: #07070f;
+  --sk-surface: #10101d;
+  --sk-ink: #eef1ff;
+  --sk-ink-faint: #a9b1d6;
+  --sk-rule: #262842;
+  --sk-tint: #141528;
+  --sk-accent: #8ff0ff;
+  --sk-accent-ink: #061218;
+  --sk-confirm: #86e3b0;
+  --sk-alert: #ffb19a;
+  --sk-series-1: #8ff0ff;
+  --sk-series-2: #c79bff;
+  --sk-series-3: #ff9bd6;
+  --galaxy-signal: #8ff0ff;
+  --nebula-opacity: .5;
+}
+
+[data-theme="glitter"] {
+  --sk-bg: #faf5ff;
+  --sk-surface: #ffffff;
+  --sk-ink: #38244e;
+  --sk-ink-faint: #705777;
+  --sk-rule: #e6d8ee;
+  --sk-tint: #f2e5fa;
+  --sk-accent: #77389b;
+  --sk-accent-ink: #ffffff;
+  --sk-confirm: #266c51;
+  --sk-alert: #9d4223;
+  --sk-series-1: #77389b;
+  --sk-series-2: #b33f79;
+  --sk-series-3: #316b91;
+  --galaxy-signal: #ffb3ec;
+  --nebula-opacity: .18;
+  --hero-bg: #1d0b2c;
+}

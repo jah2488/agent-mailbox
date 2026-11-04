@@ -1,0 +1,11 @@
+{
+  "name": "agent-mailbox-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "marked": "15.0.12"
+  }
+}

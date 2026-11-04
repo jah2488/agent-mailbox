@@ -1,0 +1,104 @@
+/* agent-mailbox: galaxy hero, a faint fixed nebula behind every page, and
+   mono details wherever something travels on the wire. */
+.sk-main { --sk-page-width: 76rem; position: relative; z-index: 1; }
+.sk-header { position: relative; z-index: 3; }
+.sk-shell { position: relative; z-index: 1; }
+.sk-brand-mark { color: var(--sk-accent); background: none; font-size: 1.1rem; }
+code { font-family: var(--sk-font-mono); font-size: .9em; }
+:not(pre) > code { padding: .08em .35em; border-radius: .3rem; background: var(--sk-tint); border: 1px solid var(--sk-rule); }
+h1, h2, h3 { letter-spacing: -.02em; }
+
+/* The fixed nebula, after skill-galaxy: blurred colour clouds, screen-blended. */
+.nebula { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; opacity: var(--nebula-opacity); }
+.cloud { position: absolute; border-radius: 50%; filter: blur(80px); mix-blend-mode: screen; }
+.c1 { width: 70vw; height: 70vw; left: -20vw; top: 30vh; background: radial-gradient(circle, rgba(124,92,255,.5), transparent 62%); }
+.c2 { width: 60vw; height: 60vw; right: -18vw; top: 80vh; background: radial-gradient(circle, rgba(255,86,168,.32), transparent 62%); }
+.c3 { width: 64vw; height: 64vw; left: 20vw; bottom: -30vh; background: radial-gradient(circle, rgba(60,206,212,.3), transparent 62%); }
+@media (prefers-reduced-motion: no-preference) {
+  .c1 { animation: drift 46s ease-in-out infinite alternate; }
+  .c2 { animation: drift 58s ease-in-out infinite alternate-reverse; }
+  .c3 { animation: drift 52s ease-in-out infinite alternate; }
+}
+@keyframes drift { to { transform: translate(6vw, -5vh) scale(1.08); } }
+
+/* Hero: the galaxy canvas fills it; copy sits on a scrim to the left. */
+.hero { position: relative; isolation: isolate; min-height: min(86vh, 46rem); margin: 0 0 2rem; border-radius: 1.4rem; overflow: hidden; background: radial-gradient(120% 90% at 70% 50%, #11102a 0%, var(--hero-bg) 60%); color: var(--hero-ink); display: flex; flex-direction: column; justify-content: center; border: 1px solid rgba(143,240,255,.12); }
+.galaxy { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
+.hero::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, var(--hero-bg) 0%, rgba(6,6,13,.9) 38%, rgba(6,6,13,.55) 50%, rgba(6,6,13,0) 64%); pointer-events: none; }
+.hero-copy { max-width: 40rem; padding: clamp(1.5rem, 4vw, 3.5rem); }
+.hero .sk-kicker { color: var(--galaxy-signal); font-family: var(--sk-font-mono); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
+.hero h1 { font-size: clamp(2.3rem, 4vw, 3.7rem); line-height: 1.02; margin: .6rem 0 1.1rem; color: var(--hero-ink); }
+.hero .glow { color: var(--galaxy-signal); text-shadow: 0 0 28px color-mix(in srgb, var(--galaxy-signal) 55%, transparent); }
+.hero .sk-lead { color: var(--hero-faint); max-width: 32rem; }
+.hero-caption { position: absolute; right: 1.4rem; bottom: 1.1rem; max-width: 24rem; margin: 0; font: .75rem/1.5 var(--sk-font-mono); color: var(--hero-faint); text-align: right; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 1.1rem; border-radius: .6rem; border: 1px solid rgba(238,241,255,.28); color: var(--hero-ink); font: 500 .9rem var(--sk-font-mono); text-decoration: none; }
+.btn:hover { border-color: var(--galaxy-signal); color: var(--galaxy-signal); }
+.btn-primary { background: var(--galaxy-signal); border-color: var(--galaxy-signal); color: #061218; font-weight: 650; }
+.btn-primary:hover { color: #061218; box-shadow: 0 0 26px color-mix(in srgb, var(--galaxy-signal) 55%, transparent); }
+@media (max-width: 860px) {
+  .hero { min-height: 0; justify-content: flex-end; padding-top: 18rem; }
+  .hero::before { background: linear-gradient(180deg, rgba(6,6,13,0) 0%, rgba(6,6,13,.85) 40%, var(--hero-bg) 70%); }
+  .hero-caption { position: static; text-align: left; padding: 0 clamp(1.5rem, 4vw, 3.5rem) 1.5rem; }
+}
+
+/* Inner page intros. */
+.page-intro { max-width: 46rem; padding: 2.5rem 0 1rem; }
+.page-intro h1 { font-size: clamp(2.6rem, 5vw, 4.2rem); line-height: 1.04; margin: .4rem 0 1rem; }
+.page-intro .sk-kicker, .sk-kicker { font-family: var(--sk-font-mono); letter-spacing: .08em; text-transform: uppercase; font-size: .78rem; color: var(--sk-accent); }
+.source-note { font-size: .875rem; color: var(--sk-ink-faint); }
+
+/* The five-hop route of one message. */
+.route { list-style: none; padding: 0; margin: 2rem 0 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; counter-reset: none; }
+.route li { position: relative; margin: 0; padding: 1.25rem 1.1rem 1.4rem; border: 1px solid var(--sk-rule); border-radius: var(--sk-radius); background: color-mix(in srgb, var(--sk-surface) 88%, transparent); }
+.route li:not(:last-child)::after { content: ""; position: absolute; top: 2rem; right: -1rem; width: 1rem; border-top: 1px dashed var(--sk-accent); opacity: .7; }
+.route-n { display: block; font: 600 .78rem var(--sk-font-mono); color: var(--sk-accent); margin-bottom: .6rem; }
+.route-title { margin: 0 0 .5rem; font: 650 1.05rem/1.3 var(--sk-font-display); color: var(--sk-ink); letter-spacing: -.01em; }
+.route p { margin: 0; font-size: .9rem; color: var(--sk-ink-faint); }
+@media (max-width: 1100px) { .route { grid-template-columns: minmax(0, 1fr); } .route li:not(:last-child)::after { top: auto; bottom: -1rem; right: auto; left: 2rem; width: 0; height: 1rem; border-top: 0; border-left: 1px dashed var(--sk-accent); } }
+
+/* Prose beside a note. */
+.split { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr); gap: 3rem; align-items: start; }
+.visible-note { margin-top: 3.2rem; }
+.visible-note strong { display: block; margin-bottom: .4rem; }
+@media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); gap: 1rem; } .visible-note { margin-top: 0; } }
+.checks { padding-left: 1.1rem; }
+.checks li { margin-bottom: .45rem; }
+
+/* Current state, two columns. */
+.state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 1.5rem; }
+.state-col { padding: 1.4rem 1.5rem; border: 1px solid var(--sk-rule); border-radius: var(--sk-radius); background: color-mix(in srgb, var(--sk-surface) 88%, transparent); }
+.state-col ul { margin: 0; padding-left: 1.1rem; }
+.state-col li { margin-bottom: .4rem; }
+.state-head { margin-top: 0; font: 600 .82rem var(--sk-font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.state-head.ok { color: var(--sk-confirm); }
+.state-head.next { color: var(--sk-ink-faint); }
+@media (max-width: 760px) { .state-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Install steps. */
+.steps { padding-left: 1.4rem; max-width: 52rem; }
+.steps li { margin-bottom: 1.25rem; }
+.steps .sk-code { margin-top: .5rem; }
+.sk-code { max-width: 100%; white-space: pre; }
+.sk-section > .sk-code { max-width: 60rem; }
+
+/* What-arrives guidance tags. */
+.guidance { list-style: none; padding: 0; }
+.guidance li { margin-bottom: .8rem; }
+.tag { display: inline-block; min-width: 5.6rem; margin-right: .5rem; padding: .1rem .5rem; border-radius: .3rem; font: 600 .75rem var(--sk-font-mono); text-align: center; border: 1px solid var(--sk-rule); }
+.tag.needs { color: var(--sk-accent-ink); background: var(--sk-accent); border-color: var(--sk-accent); }
+.tag.next { color: var(--sk-accent); }
+.tag.fyi { color: var(--sk-ink-faint); }
+.prompt { margin: 1rem 0; padding: 1rem 1.2rem; border-left: 3px solid var(--sk-accent); background: var(--sk-tint); border-radius: 0 var(--sk-radius-sm) var(--sk-radius-sm) 0; font-size: 1.05rem; }
+
+/* A terminal capture. */
+.terminal { margin: 1.25rem 0 0; max-width: 60rem; }
+.terminal pre { margin: 0; padding: 1.25rem; overflow: auto; border-radius: var(--sk-radius); background: #06060d; color: #dfe5ff; font: .85rem/1.6 var(--sk-font-mono); border: 1px solid #262842; }
+.terminal figcaption { margin-top: .5rem; font-size: .8rem; color: var(--sk-ink-faint); }
+
+/* The rendered spec. */
+.spec { max-width: 52rem; }
+.spec h3 { margin-top: 2.2rem; }
+.spec h4 { margin-top: 1.6rem; }
+.spec .sk-table-wrap { margin: 1rem 0 1.5rem; }
+.spec table caption { text-align: left; font-size: .8rem; color: var(--sk-ink-faint); padding-bottom: .4rem; }

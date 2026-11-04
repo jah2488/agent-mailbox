@@ -1,0 +1,4 @@
+# The docs site: a separate Netlify site from the relay, with base directory site/.
+[build]
+  command = "npm ci && npm run build"
+  publish = "dist"

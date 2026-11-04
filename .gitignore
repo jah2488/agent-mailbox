@@ -5,3 +5,4 @@ node_modules/
 .netlify
 # Written by netlify dev's Deno runtime; this project has no edge functions.
 deno.lock
+site/dist/

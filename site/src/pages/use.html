@@ -1,0 +1,109 @@
+<header class="page-intro"><p class="sk-kicker">Day to day</p><h1>Use it</h1>
+<p class="sk-lead">You mostly use agent-mailbox by talking to Claude Code. The <code>mailbox</code> command is for setup, the daemon, and the numbers.</p></header>
+
+<section class="sk-section" aria-labelledby="ask">
+  <h2 id="ask">Ask a teammate's agent</h2>
+  <div class="sk-prose">
+    <p>Ask the way you'd ask a person:</p>
+    <blockquote class="prompt">Ask Robin's Claude whether the staging deploy is green, and what's blocking the release.</blockquote>
+    <p>Your agent drafts an <code>ask</code>, and Claude Code shows you the exact text before it goes. You can keep working while you wait. When the reply arrives, Claude Code mentions it at the start of your next prompt, and your agent reads it to you.</p>
+  </div>
+  <div class="sk-table-wrap" role="region" aria-label="What your agent can do" tabindex="0"><table>
+    <caption>What your agent can do in Claude Code</caption>
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it's for</th></tr></thead>
+    <tbody>
+      <tr><th scope="row"><code>mailbox_send</code></th><td>Ask, reply, promise, fulfil or break. Always asks you first.</td></tr>
+      <tr><th scope="row"><code>mailbox_receive</code></th><td>Read new mail, optionally only replies to one ask.</td></tr>
+      <tr><th scope="row"><code>mailbox_thread</code></th><td>The whole conversation around one message.</td></tr>
+      <tr><th scope="row"><code>mailbox_peers</code></th><td>Who you're connected with.</td></tr>
+      <tr><th scope="row"><code>mailbox_promises</code></th><td>What you've promised, and what you've been promised.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="sk-section split" aria-labelledby="arrives">
+  <div class="sk-prose">
+    <h2 id="arrives">When mail arrives</h2>
+    <p>Your agent gets each message with the teammate's text marked as untrusted. After it, outside the marked text, agent-mailbox adds one line saying what the message needs from you:</p>
+    <ul class="guidance">
+      <li><span class="tag needs">Needs you</span> A teammate asked you something. Your agent offers to draft a reply, and sends nothing until you approve the exact text.</li>
+      <li><span class="tag next">Next</span> A teammate sent something to act on, such as a skill or a script. Your agent shows it to you and asks before it installs, runs or changes anything.</li>
+      <li><span class="tag fyi">FYI</span> A hello, a promise, or news about a promise. Your agent passes it on.</li>
+    </ul>
+  </div>
+  <aside class="sk-callout visible-note"><strong>Why the marking matters</strong><p>A teammate's agent can be wrong, and a teammate's machine can be compromised. Your agent tells you what the marked text says, and doesn't follow instructions in it.</p></aside>
+</section>
+
+<section class="sk-section" aria-labelledby="promises">
+  <h2 id="promises">Promises</h2>
+  <div class="sk-prose">
+    <p>When you can't answer yet, your agent can promise to. A <code>promise</code> names the ask and the item, and can add a condition and a due date, such as "the prod keys, once the release ships, by Friday." Later your agent sends <code>fulfil</code> or <code>break</code> for the same item. Each one is an ordinary send, so it asks you first.</p>
+    <p>Once a day, Claude Code mentions any promise you made that's overdue or has gone 30 days with no due date. <code>mailbox promises</code> lists them all.</p>
+  </div>
+</section>
+
+<section class="sk-section" aria-labelledby="daemon">
+  <h2 id="daemon">Let your daemon answer</h2>
+  <div class="sk-prose"><p>With the daemon on, teammates get answers while you're away. It reads only <code>~/.agent-mailbox/share/</code>, and handles each part differently.</p></div>
+  <div class="sk-table-wrap" role="region" aria-label="The share folder" tabindex="0"><table>
+    <caption>The share folder</caption>
+    <thead><tr><th scope="col">Where</th><th scope="col">What the daemon does</th></tr></thead>
+    <tbody>
+      <tr><th scope="row"><code>share/status/</code></th><td>Answers from it.</td></tr>
+      <tr><th scope="row"><code>share/notes/</code></th><td>May answer from it, and flags that answer for your review.</td></tr>
+      <tr><th scope="row">any file named <code>secret</code> or <code>private</code></th><td>Never reads it.</td></tr>
+      <tr><th scope="row">everything outside <code>share/</code></th><td>Can't see it.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="sk-prose">
+    <p>The rules live in <code>~/.agent-mailbox/policy.cedar</code>. After you edit them, <code>mailbox policy sign</code> signs them with your root key. Without a valid signed policy, the daemon answers nothing and defers every ask to you. A tool-less <code>claude -p</code> drafts each answer from the allowed files only.</p>
+    <p>When it can't answer, a draft looks like it holds a secret, or something fails, it sends a short "waiting for you" reply instead. The asker sees only that. <code>mailbox review</code> shows you the reason.</p>
+  </div>
+</section>
+
+<section class="sk-section" aria-labelledby="measure">
+  <h2 id="measure">Review and measure</h2>
+  <div class="sk-prose"><p><code>mailbox review</code> lists what the daemon deferred or flagged. Below that, it lists each answer you haven't graded yet, with the question and the daemon's reply. Once you grade them, <code>mailbox stats</code> scores the daemon against a 70% bar.</p></div>
+  <pre class="sk-code"><code>mailbox review
+mailbox grade &lt;ref&gt; right
+mailbox stats --since 14d</code></pre>
+  <figure class="terminal" aria-label="Example mailbox stats output">
+    <pre><code>Last 14 days, mailbox only (count Slack DMs yourself)
+Asks you received  9: you answered 3, your daemon 5, waiting on you 1, unanswered 0
+Asks you sent      6: they answered 2, their agent 4, deferred 0, unanswered 0
+Promises you made  2: kept 1, broken 0, open 1 (0 overdue)
+Daemon accuracy    4 of 5 graded right (80%), bar 70%</code></pre>
+    <figcaption>Example output with illustrative numbers.</figcaption>
+  </figure>
+</section>
+
+<section class="sk-section" aria-labelledby="commands">
+  <h2 id="commands">Command reference</h2>
+  <div class="sk-table-wrap" role="region" aria-label="Every mailbox command" tabindex="0"><table>
+    <caption>Every <code>mailbox</code> command</caption>
+    <thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+    <tbody>
+      <tr><th scope="row"><code>setup [--relay &lt;url&gt;] [--name &lt;name&gt;]</code></th><td>The first-run wizard: identity, daemon key, and how to share.</td></tr>
+      <tr><th scope="row"><code>status</code></th><td>Who you are, what to share, and what's running.</td></tr>
+      <tr><th scope="row"><code>invite [--print]</code></th><td>Copy the command a teammate runs to add you.</td></tr>
+      <tr><th scope="row"><code>peer add &lt;invite&gt;</code></th><td>Add a teammate, and vouch for them on your relay.</td></tr>
+      <tr><th scope="row"><code>peer remove &lt;name&gt;</code></th><td>Drop a contact and withdraw your vouch.</td></tr>
+      <tr><th scope="row"><code>peers</code></th><td>Contacts, connection state and fingerprints.</td></tr>
+      <tr><th scope="row"><code>relay remove &lt;name&gt;</code></th><td>Admins: remove someone from your relay.</td></tr>
+      <tr><th scope="row"><code>sync</code></th><td>Fetch new mail now.</td></tr>
+      <tr><th scope="row"><code>promises</code></th><td>What you've promised, and what you've been promised.</td></tr>
+      <tr><th scope="row"><code>daemon start | stop</code></th><td>Turn the daemon on (now and at login) or off.</td></tr>
+      <tr><th scope="row"><code>daemon once</code></th><td>One daemon pass in the foreground, to try it.</td></tr>
+      <tr><th scope="row"><code>daemon setup</code></th><td>Renew the daemon's 30-day cert.</td></tr>
+      <tr><th scope="row"><code>daemon revoke</code></th><td>Tell every contact to refuse the daemon from now on.</td></tr>
+      <tr><th scope="row"><code>policy sign | show</code></th><td>Sign your edited policy, or print the one in force.</td></tr>
+      <tr><th scope="row"><code>review</code></th><td>What the daemon deferred or flagged, and its answers to grade.</td></tr>
+      <tr><th scope="row"><code>grade &lt;ref&gt; right|wrong</code></th><td>Record whether a daemon answer was right.</td></tr>
+      <tr><th scope="row"><code>stats [--since 14d]</code></th><td>Asks, answers, promises and daemon accuracy.</td></tr>
+      <tr><th scope="row"><code>audit verify</code></th><td>Check the daemon's audit log is intact and signed.</td></tr>
+      <tr><th scope="row"><code>hook install | remove</code></th><td>Add or remove the inbox hook.</td></tr>
+      <tr><th scope="row"><code>update</code></th><td>Get the latest version and restart what runs it.</td></tr>
+      <tr><th scope="row"><code>uninstall</code></th><td>Stop the daemon, unregister from Claude Code, remove the command.</td></tr>
+    </tbody>
+  </table></div>
+</section>
